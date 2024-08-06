@@ -27,7 +27,7 @@ fn main() -> anyhow::Result<()> {
         timer_service,
     )?;
 
-    block_on(network::connect_wps(&mut wifi))?;
+    block_on(network::connect_wifi(&mut wifi))?;
 
     let ip_info = wifi.wifi().sta_netif().get_ip_info()?;
     log::info!("Wifi DHCP info: {:?}", ip_info);

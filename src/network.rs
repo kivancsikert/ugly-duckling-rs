@@ -1,4 +1,3 @@
-
 use embedded_svc::wifi::{AuthMethod, ClientConfiguration, Configuration};
 
 use esp_idf_svc::wifi::{AsyncWifi, EspWifi};
@@ -14,38 +13,52 @@ const WPS_CONFIG: WpsConfig = WpsConfig {
     },
 };
 
-pub async fn connect_wps(wifi: &mut AsyncWifi<EspWifi<'static>>) -> anyhow::Result<()> {
+pub async fn connect_wifi(wifi: &mut AsyncWifi<EspWifi<'static>>) -> anyhow::Result<()> {
     wifi.start().await?;
     log::info!("Wifi started");
 
-    match wifi.start_wps(&WPS_CONFIG).await? {
-        WpsStatus::SuccessConnected => (),
-        WpsStatus::SuccessMultipleAccessPoints(credentials) => {
-            log::info!("received multiple credentials, connecting to first one:");
-            for i in &credentials {
-                log::info!(" - ssid: {}", i.ssid);
-            }
-            let wifi_configuration: Configuration = Configuration::Client(ClientConfiguration {
-                ssid: credentials[0].ssid.clone(),
-                bssid: None,
-                auth_method: AuthMethod::WPA2Personal,
-                password: credentials[1].passphrase.clone(),
-                channel: None,
-                ..Default::default()
-            });
-            wifi.set_configuration(&wifi_configuration)?;
-        }
-        WpsStatus::Failure => anyhow::bail!("WPS failure"),
-        WpsStatus::Timeout => anyhow::bail!("WPS timeout"),
-        WpsStatus::Pin(_) => anyhow::bail!("WPS pin"),
-        WpsStatus::PbcOverlap => anyhow::bail!("WPS PBC overlap"),
-    }
-
     match wifi.get_configuration()? {
         Configuration::Client(config) => {
-            log::info!("Successfully connected to {} using WPS", config.ssid)
+            log::info!(
+                "Using stored credentials to connect to SSID {}",
+                config.ssid
+            );
         }
-        _ => anyhow::bail!("Not in station mode"),
+        // TODO Is this the right way to handle mixed mode?
+        Configuration::Mixed(client, _) => {
+            log::info!(
+                "Using stored credentials to connect to SSID {} (mixed)",
+                client.ssid
+            );
+        }
+        // TODO What should we do with AccessPoint?
+        Configuration::None | Configuration::AccessPoint(_) => {
+            match wifi.start_wps(&WPS_CONFIG).await? {
+                WpsStatus::SuccessConnected => (),
+                WpsStatus::SuccessMultipleAccessPoints(credentials) => {
+                    log::info!("Received multiple credentials, connecting to first one:");
+                    for i in &credentials {
+                        log::info!(" - ssid: {}", i.ssid);
+                    }
+                    let ref ssid = credentials[0].ssid;
+                    let wifi_configuration: Configuration =
+                        Configuration::Client(ClientConfiguration {
+                            ssid: ssid.clone(),
+                            bssid: None,
+                            auth_method: AuthMethod::WPA2Personal,
+                            password: credentials[1].passphrase.clone(),
+                            channel: None,
+                            ..Default::default()
+                        });
+                    wifi.set_configuration(&wifi_configuration)?;
+                    log::info!("Successfully connected to {} via WPS", ssid);
+                }
+                WpsStatus::Failure => anyhow::bail!("WPS failure"),
+                WpsStatus::Timeout => anyhow::bail!("WPS timeout"),
+                WpsStatus::Pin(_) => anyhow::bail!("WPS pin"),
+                WpsStatus::PbcOverlap => anyhow::bail!("WPS PBC overlap"),
+            }
+        }
     };
 
     wifi.connect().await?;
