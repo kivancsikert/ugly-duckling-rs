@@ -1,7 +1,10 @@
 use embedded_svc::wifi::{AuthMethod, ClientConfiguration, Configuration};
 
+use esp_idf_svc::hal::prelude::Peripherals;
+use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::wifi::{AsyncWifi, EspWifi};
 use esp_idf_svc::wifi::{WpsConfig, WpsFactoryInfo, WpsStatus, WpsType};
+use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 
 const WPS_CONFIG: WpsConfig = WpsConfig {
     wps_type: WpsType::Pbc,
@@ -13,7 +16,15 @@ const WPS_CONFIG: WpsConfig = WpsConfig {
     },
 };
 
-pub async fn connect_wifi(wifi: &mut AsyncWifi<EspWifi<'static>>) -> anyhow::Result<()> {
+pub async fn connect_wifi(
+    sys_loop: &EspSystemEventLoop,
+    timer_service: &EspTaskTimerService,
+    nvs: &EspDefaultNvsPartition,
+) -> anyhow::Result<EspWifi<'static>> {
+    let peripherals = Peripherals::take()?;
+    let mut esp_wifi = EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs.clone()))?;
+    let mut wifi = AsyncWifi::wrap(&mut esp_wifi, sys_loop.clone(), timer_service.clone())?;
+
     wifi.start().await?;
     log::info!("Wifi started");
 
@@ -67,5 +78,5 @@ pub async fn connect_wifi(wifi: &mut AsyncWifi<EspWifi<'static>>) -> anyhow::Res
     wifi.wait_netif_up().await?;
     log::info!("Wifi netif up");
 
-    Ok(())
+    Ok(esp_wifi)
 }
