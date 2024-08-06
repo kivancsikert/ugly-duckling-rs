@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Lóránt Pintér <lorant.pinter@gmail.com>"]
 edition = "2021"
 resolver = "2"
-rust-version = "1.77"
+rust-version = "1.80"
 
 [[bin]]
 name = "ugly-duckling-rs"
