@@ -40,7 +40,7 @@ pub async fn connect_wifi(wifi: &mut AsyncWifi<EspWifi<'static>>) -> anyhow::Res
                     for i in &credentials {
                         log::info!(" - ssid: {}", i.ssid);
                     }
-                    let ref ssid = credentials[0].ssid;
+                    let ssid = &credentials[0].ssid;
                     let wifi_configuration: Configuration =
                         Configuration::Client(ClientConfiguration {
                             ssid: ssid.clone(),
