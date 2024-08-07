@@ -1,6 +1,8 @@
 mod network;
 
-use esp_idf_svc::hal::task::block_on;
+use std::future::pending;
+
+use esp_idf_svc::hal::task;
 use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 
@@ -18,14 +20,13 @@ fn main() -> anyhow::Result<()> {
     let timer_service = EspTaskTimerService::new()?;
     let nvs = EspDefaultNvsPartition::take()?;
 
-    let wifi = block_on(network::connect_wifi(&sys_loop, &timer_service, &nvs))?;
+    let wifi = task::block_on(network::connect_wifi(&sys_loop, &timer_service, &nvs))?;
 
     let ip_info = wifi.sta_netif().get_ip_info()?;
     log::info!("Wifi DHCP info: {:?}", ip_info);
 
-    log::info!("Shutting down in 5s...");
+    log::info!("Entering idle loop...");
 
-    std::thread::sleep(core::time::Duration::from_secs(5));
-
+    task::block_on(pending::<()>());
     Ok(())
 }
