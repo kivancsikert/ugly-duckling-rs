@@ -2,7 +2,7 @@ mod network;
 
 use embassy_executor::{Executor, Spawner};
 use embedded_hal_async::delay::DelayNs;
-use esp_idf_hal::gpio::{Gpio4, PinDriver};
+use esp_idf_hal::gpio::{AnyOutputPin, PinDriver};
 use esp_idf_hal::prelude::Peripherals;
 use esp_idf_svc::mdns::EspMdns;
 use esp_idf_svc::sntp;
@@ -50,7 +50,7 @@ async fn run_with_errors(spawner: Spawner) -> anyhow::Result<()> {
     let peripherals = Peripherals::take()?;
 
     spawner
-        .spawn(blink(peripherals.pins.gpio4))
+        .spawn(blink(peripherals.pins.gpio4.into()))
         .map_err(|error| anyhow::anyhow!("Failed to spawn blink task: {:?}", error))?;
 
     let sys_loop = EspSystemEventLoop::take()?;
@@ -114,18 +114,16 @@ async fn run_with_errors(spawner: Spawner) -> anyhow::Result<()> {
 }
 
 #[embassy_executor::task]
-async fn blink(gpio: Gpio4) {
+async fn blink(pin: AnyOutputPin) {
     log::info!("Blink task started");
 
     let timer_service = EspTaskTimerService::new().unwrap();
     let mut timer = timer_service.timer_async().unwrap();
-    let mut status = PinDriver::output(gpio).unwrap();
+    let mut status = PinDriver::output(pin).unwrap();
     loop {
-        log::info!("Blinker off");
         status.set_high().unwrap();
         timer.delay_ms(1000).await;
 
-        log::info!("Blinker on");
         status.set_low().unwrap();
         timer.delay_ms(1000).await;
     }
