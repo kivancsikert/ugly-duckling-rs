@@ -1,5 +1,6 @@
 mod network;
 
+use embassy_executor::{Executor, Spawner};
 use esp_idf_hal::gpio::PinDriver;
 use esp_idf_hal::prelude::Peripherals;
 use esp_idf_svc::hal::task;
@@ -8,7 +9,10 @@ use esp_idf_svc::sntp;
 use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 use network::{query_mdns, Service};
+use static_cell::StaticCell;
 use std::future::pending;
+
+static EXECUTOR: StaticCell<Executor> = StaticCell::new();
 
 fn main() -> anyhow::Result<()> {
     // It is necessary to call this function once. Otherwise some patches to the runtime
@@ -28,6 +32,18 @@ fn main() -> anyhow::Result<()> {
         env!("GIT_VERSION")
     );
 
+    let executor = EXECUTOR.init(Executor::new());
+    executor.run(|spawner| {
+        spawner.spawn(run(spawner)).unwrap();
+    });
+}
+
+#[embassy_executor::task]
+async fn run(spawner: Spawner) {
+    run_with_errors(spawner).await.unwrap()
+}
+
+async fn run_with_errors(_spawner: Spawner) -> anyhow::Result<()> {
     let peripherals = Peripherals::take()?;
 
     let mut status = PinDriver::output(peripherals.pins.gpio4)?;
