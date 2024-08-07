@@ -41,15 +41,8 @@ pub async fn connect_wifi(
                 config.ssid
             );
         }
-        // TODO Is this the right way to handle mixed mode?
-        Configuration::Mixed(client, _) => {
-            log::info!(
-                "Using stored credentials to connect to SSID {} (mixed)",
-                client.ssid
-            );
-        }
         // TODO What should we do with AccessPoint?
-        Configuration::None | Configuration::AccessPoint(_) => {
+        Configuration::None | Configuration::AccessPoint(_) | Configuration::Mixed(_, _) => {
             match wifi.start_wps(&WPS_CONFIG).await? {
                 WpsStatus::SuccessConnected => (),
                 WpsStatus::SuccessMultipleAccessPoints(credentials) => {
