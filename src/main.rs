@@ -106,7 +106,8 @@ async fn run_with_errors(spawner: Spawner) -> anyhow::Result<()> {
     log::info!("Device started in {} ms", uptime_us as f64 / 1000.0);
 
     log::info!("Entering idle loop...");
-    Ok(pending::<()>().await)
+    pending::<()>().await;
+    Ok(())
 }
 
 #[embassy_executor::task]
