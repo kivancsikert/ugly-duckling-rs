@@ -1,6 +1,7 @@
 mod network;
 
 use embassy_executor::{Executor, Spawner};
+use embassy_futures::select::select;
 use embedded_hal_async::delay::DelayNs;
 use esp_idf_hal::gpio::{AnyIOPin, AnyOutputPin, IOPin, PinDriver};
 use esp_idf_hal::prelude::Peripherals;
@@ -55,6 +56,11 @@ async fn run_with_errors() -> anyhow::Result<()> {
         .spawn(blink(peripherals.pins.gpio4.into()))
         .map_err(|error| anyhow::anyhow!("Failed to spawn blink task: {:?}", error))?;
 
+    Spawner::for_current_executor()
+        .await
+        .spawn(reset_watcher(peripherals.pins.gpio0.downgrade()))
+        .map_err(|error| anyhow::anyhow!("Failed to spawn blink task: {:?}", error))?;
+
     let sys_loop = EspSystemEventLoop::take()?;
     let timer_service = EspTaskTimerService::new()?;
     let nvs = EspDefaultNvsPartition::take()?;
@@ -62,11 +68,6 @@ async fn run_with_errors() -> anyhow::Result<()> {
     let wifi = network::connect_wifi(peripherals.modem, &sys_loop, &timer_service, &nvs).await?;
     let ip_info = wifi.sta_netif().get_ip_info()?;
     log::info!("WiFi DHCP info: {:?}", ip_info);
-
-    Spawner::for_current_executor()
-        .await
-        .spawn(reset_watcher(peripherals.pins.gpio0.downgrade()))
-        .map_err(|error| anyhow::anyhow!("Failed to spawn blink task: {:?}", error))?;
 
     // TODO Use some async mDNS instead to avoid blocking the executor
     let mdns = EspMdns::take()?;
@@ -128,9 +129,12 @@ async fn reset_watcher(pin: AnyIOPin) {
         let start = Instant::now();
         log::info!("Button pressed, waiting for release");
 
-        button.wait_for_high().await.unwrap();
-        let end = Instant::now();
+        let timer_service = EspTaskTimerService::new().unwrap();
+        let mut timer = timer_service.timer_async().unwrap();
 
+        select(timer.delay_ms(5000), button.wait_for_high()).await;
+
+        let end = Instant::now();
         if end - start > Duration::from_secs(5) {
             log::info!("Button pressed for more than 5 seconds, resetting WiFi");
             unsafe { esp_idf_sys::esp_wifi_restore() };

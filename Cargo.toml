@@ -40,6 +40,9 @@ embassy-executor = { version = "0.6", features = [
     "executor-thread",
     "log",
 ] }
+embassy-futures = { version = "0.1", features = [
+    "log",
+] }
 static_cell = "2"
 
 [build-dependencies]
