@@ -2,7 +2,7 @@ mod network;
 
 use embassy_executor::{Executor, Spawner};
 use embedded_hal_async::delay::DelayNs;
-use esp_idf_hal::gpio::{AnyOutputPin, PinDriver};
+use esp_idf_hal::gpio::{AnyIOPin, AnyOutputPin, IOPin, PinDriver};
 use esp_idf_hal::prelude::Peripherals;
 use esp_idf_svc::mdns::EspMdns;
 use esp_idf_svc::sntp;
@@ -11,6 +11,7 @@ use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 use network::{query_mdns, Service};
 use static_cell::StaticCell;
 use std::future::pending;
+use std::time::{Duration, Instant};
 
 static EXECUTOR: StaticCell<Executor> = StaticCell::new();
 
@@ -62,6 +63,11 @@ async fn run_with_errors() -> anyhow::Result<()> {
     let ip_info = wifi.sta_netif().get_ip_info()?;
     log::info!("WiFi DHCP info: {:?}", ip_info);
 
+    Spawner::for_current_executor()
+        .await
+        .spawn(reset_watcher(peripherals.pins.gpio0.downgrade()))
+        .map_err(|error| anyhow::anyhow!("Failed to spawn blink task: {:?}", error))?;
+
     // TODO Use some async mDNS instead to avoid blocking the executor
     let mdns = EspMdns::take()?;
 
@@ -110,6 +116,27 @@ async fn run_with_errors() -> anyhow::Result<()> {
     log::info!("Entering idle loop...");
     pending::<()>().await;
     Ok(())
+}
+
+#[embassy_executor::task]
+async fn reset_watcher(pin: AnyIOPin) {
+    let mut button = PinDriver::input(pin).unwrap();
+    button.set_pull(esp_idf_hal::gpio::Pull::Up).unwrap();
+    log::info!("Factory reset watcher started");
+    loop {
+        button.wait_for_low().await.unwrap();
+        let start = Instant::now();
+        log::info!("Button pressed, waiting for release");
+
+        button.wait_for_high().await.unwrap();
+        let end = Instant::now();
+
+        if end - start > Duration::from_secs(5) {
+            log::info!("Button pressed for more than 5 seconds, resetting WiFi");
+            unsafe { esp_idf_sys::esp_wifi_restore() };
+            unsafe { esp_idf_sys::esp_restart() };
+        }
+    }
 }
 
 #[embassy_executor::task]
