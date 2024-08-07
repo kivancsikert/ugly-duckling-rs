@@ -61,6 +61,7 @@ async fn run_with_errors(spawner: Spawner) -> anyhow::Result<()> {
     let ip_info = wifi.sta_netif().get_ip_info()?;
     log::info!("WiFi DHCP info: {:?}", ip_info);
 
+    // TODO Use some async mDNS instead to avoid blocking the executor
     let mdns = EspMdns::take()?;
 
     let ntp = query_mdns(&mdns, "_ntp", "_udp")?.unwrap_or_else(|| Service {
