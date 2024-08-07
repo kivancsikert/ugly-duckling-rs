@@ -1,10 +1,10 @@
 mod network;
 
-use std::future::pending;
-
 use esp_idf_svc::hal::task;
+use esp_idf_svc::sntp;
 use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
+use std::future::pending;
 
 fn main() -> anyhow::Result<()> {
     // It is necessary to call this function once. Otherwise some patches to the runtime
@@ -31,6 +31,11 @@ fn main() -> anyhow::Result<()> {
     let wifi = task::block_on(network::connect_wifi(&sys_loop, &timer_service, &nvs))?;
     let ip_info = wifi.sta_netif().get_ip_info()?;
     log::info!("WiFi DHCP info: {:?}", ip_info);
+
+    let _sntp = sntp::EspSntp::new_with_callback(&Default::default(), |duration| {
+        log::info!("SNTP time: {:?}", duration);
+    })?;
+    log::info!("Current time: {:?}", std::time::SystemTime::now());
 
     let (mut mqtt, _) = network::connect_mqtt("mqtt://bumblebee.local", "ugly-duckling-rs-test")?;
     let payload = "Hello, World!".as_bytes();
