@@ -34,22 +34,23 @@ fn main() -> anyhow::Result<()> {
 
     let executor = EXECUTOR.init(Executor::new());
     executor.run(|spawner| {
-        spawner.spawn(run(spawner)).unwrap();
+        spawner.spawn(run()).unwrap();
     });
 }
 
 #[embassy_executor::task]
-async fn run(spawner: Spawner) {
-    match run_with_errors(spawner).await {
+async fn run() {
+    match run_with_errors().await {
         Ok(_) => log::info!("Program exited cleanly"),
         Err(error) => log::error!("Program exited with error: {:?}", error),
     }
 }
 
-async fn run_with_errors(spawner: Spawner) -> anyhow::Result<()> {
+async fn run_with_errors() -> anyhow::Result<()> {
     let peripherals = Peripherals::take()?;
 
-    spawner
+    Spawner::for_current_executor()
+        .await
         .spawn(blink(peripherals.pins.gpio4.into()))
         .map_err(|error| anyhow::anyhow!("Failed to spawn blink task: {:?}", error))?;
 
