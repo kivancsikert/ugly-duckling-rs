@@ -14,7 +14,12 @@ fn main() -> anyhow::Result<()> {
     // Bind the log crate to the ESP Logging facilities
     esp_idf_svc::log::EspLogger::initialize_default();
 
-    log::info!("Hello, world!");
+    log::info!("  ______                   _    _       _");
+    log::info!(" |  ____|                 | |  | |     | |");
+    log::info!(" | |__ __ _ _ __ _ __ ___ | |__| |_   _| |__");
+    log::info!(" |  __/ _` | '__| '_ ` _ \\|  __  | | | | '_ \\");
+    log::info!(" | | | (_| | |  | | | | | | |  | | |_| | |_) |");
+    log::info!(" |_|  \\__,_|_|  |_| |_| |_|_|  |_|\\__,_|_.__/ {}", env!("GIT_VERSION"));
 
     let sys_loop = EspSystemEventLoop::take()?;
     let timer_service = EspTaskTimerService::new()?;
