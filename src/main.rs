@@ -19,7 +19,10 @@ fn main() -> anyhow::Result<()> {
     log::info!(" | |__ __ _ _ __ _ __ ___ | |__| |_   _| |__");
     log::info!(" |  __/ _` | '__| '_ ` _ \\|  __  | | | | '_ \\");
     log::info!(" | | | (_| | |  | | | | | | |  | | |_| | |_) |");
-    log::info!(" |_|  \\__,_|_|  |_| |_| |_|_|  |_|\\__,_|_.__/ {}", env!("GIT_VERSION"));
+    log::info!(
+        " |_|  \\__,_|_|  |_| |_| |_|_|  |_|\\__,_|_.__/ {}",
+        env!("GIT_VERSION")
+    );
 
     let sys_loop = EspSystemEventLoop::take()?;
     let timer_service = EspTaskTimerService::new()?;
