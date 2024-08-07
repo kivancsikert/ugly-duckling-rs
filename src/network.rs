@@ -12,16 +12,6 @@ use esp_idf_svc::wifi::{AsyncWifi, EspWifi};
 use esp_idf_svc::wifi::{WpsConfig, WpsFactoryInfo, WpsStatus, WpsType};
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 
-const WPS_CONFIG: WpsConfig = WpsConfig {
-    wps_type: WpsType::Pbc,
-    factory_info: WpsFactoryInfo {
-        manufacturer: "ESPRESSIF",
-        model_number: "esp32",
-        model_name: "ESPRESSIF IOT",
-        device_name: "ESP DEVICE",
-    },
-};
-
 pub async fn connect_wifi(
     modem: Modem,
     sys_loop: &EspSystemEventLoop,
@@ -43,7 +33,20 @@ pub async fn connect_wifi(
         }
         // TODO What should we do with AccessPoint?
         Configuration::None | Configuration::AccessPoint(_) | Configuration::Mixed(_, _) => {
-            match wifi.start_wps(&WPS_CONFIG).await? {
+            let wps_config = WpsConfig {
+                wps_type: WpsType::Pbc,
+                factory_info: WpsFactoryInfo {
+                    manufacturer: "FarmHub",
+                    model_name: "Ugly Duckling",
+                    // TODO Set up the correct model number
+                    model_number: "MK6",
+                    // TODO Set up the correct device name
+                    device_name: "test-mk6-rs-1",
+                },
+            };
+
+            log::info!("Starting WPS");
+            match wifi.start_wps(&wps_config).await? {
                 WpsStatus::SuccessConnected => (),
                 WpsStatus::SuccessMultipleAccessPoints(credentials) => {
                     log::info!("Received multiple credentials, connecting to first one:");
