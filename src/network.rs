@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use embedded_svc::wifi::{AuthMethod, ClientConfiguration, Configuration};
 
-use esp_idf_svc::hal::prelude::Peripherals;
+use esp_idf_hal::modem::Modem;
 use esp_idf_svc::mdns::{EspMdns, Interface, Protocol, QueryResult};
 use esp_idf_svc::mqtt::client::{
     EspAsyncMqttClient, EspAsyncMqttConnection, MqttClientConfiguration,
@@ -23,12 +23,12 @@ const WPS_CONFIG: WpsConfig = WpsConfig {
 };
 
 pub async fn connect_wifi(
+    modem: Modem,
     sys_loop: &EspSystemEventLoop,
     timer_service: &EspTaskTimerService,
     nvs: &EspDefaultNvsPartition,
 ) -> anyhow::Result<EspWifi<'static>> {
-    let peripherals = Peripherals::take()?;
-    let mut esp_wifi = EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs.clone()))?;
+    let mut esp_wifi = EspWifi::new(modem, sys_loop.clone(), Some(nvs.clone()))?;
     let mut wifi = AsyncWifi::wrap(&mut esp_wifi, sys_loop.clone(), timer_service.clone())?;
 
     wifi.start().await?;

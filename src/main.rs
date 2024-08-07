@@ -1,5 +1,7 @@
 mod network;
 
+use esp_idf_hal::gpio::PinDriver;
+use esp_idf_hal::prelude::Peripherals;
 use esp_idf_svc::hal::task;
 use esp_idf_svc::mdns::EspMdns;
 use esp_idf_svc::sntp;
@@ -26,11 +28,21 @@ fn main() -> anyhow::Result<()> {
         env!("GIT_VERSION")
     );
 
+    let peripherals = Peripherals::take()?;
+
+    let mut status = PinDriver::output(peripherals.pins.gpio4)?;
+    status.set_low()?;
+
     let sys_loop = EspSystemEventLoop::take()?;
     let timer_service = EspTaskTimerService::new()?;
     let nvs = EspDefaultNvsPartition::take()?;
 
-    let wifi = task::block_on(network::connect_wifi(&sys_loop, &timer_service, &nvs))?;
+    let wifi = task::block_on(network::connect_wifi(
+        peripherals.modem,
+        &sys_loop,
+        &timer_service,
+        &nvs,
+    ))?;
     let ip_info = wifi.sta_netif().get_ip_info()?;
     log::info!("WiFi DHCP info: {:?}", ip_info);
 
@@ -73,6 +85,10 @@ fn main() -> anyhow::Result<()> {
         false,
         payload,
     ))?;
+
+    let uptime_us = unsafe { esp_idf_sys::esp_timer_get_time() };
+    log::info!("Device started in {} ms", uptime_us as f64 / 1000.0);
+    status.set_high()?;
 
     log::info!("Entering idle loop...");
     task::block_on(pending::<()>());
