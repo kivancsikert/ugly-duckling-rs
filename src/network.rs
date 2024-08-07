@@ -24,55 +24,46 @@ pub async fn connect_wifi(
     wifi.start().await?;
     log::info!("Wifi started");
 
-    match wifi.get_configuration()? {
-        Configuration::Client(config) => {
-            log::info!(
-                "Using stored credentials to connect to SSID {}",
-                config.ssid
-            );
-        }
-        // TODO What should we do with AccessPoint?
-        Configuration::None | Configuration::AccessPoint(_) | Configuration::Mixed(_, _) => {
-            let wps_config = WpsConfig {
-                wps_type: WpsType::Pbc,
-                factory_info: WpsFactoryInfo {
-                    manufacturer: "FarmHub",
-                    model_name: "Ugly Duckling",
-                    // TODO Set up the correct model number
-                    model_number: "MK6",
-                    // TODO Set up the correct device name
-                    device_name: "test-mk6-rs-1",
-                },
-            };
+    if !has_stored_client_configuration(wifi.get_configuration()?) {
+        let wps_config = WpsConfig {
+            wps_type: WpsType::Pbc,
+            factory_info: WpsFactoryInfo {
+                manufacturer: "FarmHub",
+                model_name: "Ugly Duckling",
+                // TODO Set up the correct model number
+                model_number: "MK6",
+                // TODO Set up the correct device name
+                device_name: "test-mk6-rs-1",
+            },
+        };
 
-            log::info!("Starting WPS");
-            match wifi.start_wps(&wps_config).await? {
-                WpsStatus::SuccessConnected => (),
-                WpsStatus::SuccessMultipleAccessPoints(credentials) => {
-                    log::info!("Received multiple credentials, connecting to first one:");
-                    for i in &credentials {
-                        log::info!(" - ssid: {}", i.ssid);
-                    }
-                    let ssid = &credentials[0].ssid;
-                    let wifi_configuration: Configuration =
-                        Configuration::Client(ClientConfiguration {
-                            ssid: ssid.clone(),
-                            bssid: None,
-                            auth_method: AuthMethod::WPA2Personal,
-                            password: credentials[1].passphrase.clone(),
-                            channel: None,
-                            ..Default::default()
-                        });
-                    wifi.set_configuration(&wifi_configuration)?;
-                    log::info!("Successfully connected to {} via WPS", ssid);
+        log::info!("Starting WPS");
+        match wifi.start_wps(&wps_config).await? {
+            WpsStatus::SuccessConnected => (),
+            WpsStatus::SuccessMultipleAccessPoints(credentials) => {
+                log::info!("Received multiple credentials, connecting to first one:");
+                for i in &credentials {
+                    log::info!(" - ssid: {}", i.ssid);
                 }
-                WpsStatus::Failure => anyhow::bail!("WPS failure"),
-                WpsStatus::Timeout => anyhow::bail!("WPS timeout"),
-                WpsStatus::Pin(_) => anyhow::bail!("WPS pin"),
-                WpsStatus::PbcOverlap => anyhow::bail!("WPS PBC overlap"),
+                let ssid = &credentials[0].ssid;
+                let wifi_configuration: Configuration =
+                    Configuration::Client(ClientConfiguration {
+                        ssid: ssid.clone(),
+                        bssid: None,
+                        auth_method: AuthMethod::WPA2Personal,
+                        password: credentials[1].passphrase.clone(),
+                        channel: None,
+                        ..Default::default()
+                    });
+                wifi.set_configuration(&wifi_configuration)?;
+                log::info!("Successfully connected to {} via WPS", ssid);
             }
+            WpsStatus::Failure => anyhow::bail!("WPS failure"),
+            WpsStatus::Timeout => anyhow::bail!("WPS timeout"),
+            WpsStatus::Pin(_) => anyhow::bail!("WPS pin"),
+            WpsStatus::PbcOverlap => anyhow::bail!("WPS PBC overlap"),
         }
-    };
+    }
 
     wifi.connect().await?;
     log::info!("Wifi connected");
@@ -81,6 +72,34 @@ pub async fn connect_wifi(
     log::info!("Wifi netif up");
 
     Ok(esp_wifi)
+}
+
+fn has_stored_client_configuration(wifi_config: Configuration) -> bool {
+    match wifi_config {
+        Configuration::Client(config) => {
+            log::info!(
+                "Using stored client credentials to connect to SSID {}",
+                config.ssid
+            );
+            true
+        }
+        Configuration::Mixed(client, _) => {
+            if client.ssid.is_empty() {
+                log::info!("No stored client credentials (mixed)");
+                false
+            } else {
+                log::info!(
+                    "Using stored client credentials to connect to SSID {} (mixed)",
+                    client.ssid
+                );
+                true
+            }
+        }
+        Configuration::None | Configuration::AccessPoint(_) => {
+            log::info!("No stored client credentials");
+            false
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
