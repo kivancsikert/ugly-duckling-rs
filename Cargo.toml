@@ -38,3 +38,6 @@ esp-idf-sys = "0.35"
 
 [build-dependencies]
 embuild = "0.32"
+
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/mdns", version = "1.3" }
