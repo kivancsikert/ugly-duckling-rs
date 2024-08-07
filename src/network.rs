@@ -1,6 +1,9 @@
+use std::time::Duration;
+
 use embedded_svc::wifi::{AuthMethod, ClientConfiguration, Configuration};
 
 use esp_idf_svc::hal::prelude::Peripherals;
+use esp_idf_svc::mdns::{EspMdns, Interface, Protocol, QueryResult};
 use esp_idf_svc::mqtt::client::{
     EspAsyncMqttClient, EspAsyncMqttConnection, MqttClientConfiguration,
 };
@@ -82,6 +85,32 @@ pub async fn connect_wifi(
     log::info!("Wifi netif up");
 
     Ok(esp_wifi)
+}
+
+#[derive(Debug, Clone)]
+pub struct Service {
+    pub hostname: String,
+    pub port: u16,
+}
+
+pub fn query_mdns(service: &str, proto: &str) -> anyhow::Result<Option<Service>> {
+    let mdns = EspMdns::take()?;
+    let mut results = [QueryResult {
+        instance_name: None,
+        hostname: None,
+        port: 0,
+        txt: Vec::new(),
+        addr: Vec::new(),
+        interface: Interface::STA,
+        ip_protocol: Protocol::V4,
+    }];
+    mdns.query_ptr(service, proto, Duration::from_secs(5), 1, &mut results)?;
+    log::info!("MDNS query result: {:?}", results);
+    let result = results[0].clone();
+    Ok(result.hostname.map(|hostname| Service {
+        hostname,
+        port: result.port,
+    }))
 }
 
 pub fn connect_mqtt(
