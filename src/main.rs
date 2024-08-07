@@ -31,7 +31,12 @@ fn main() -> anyhow::Result<()> {
 
     let (mut mqtt, _) = network::connect_mqtt("mqtt://bumblebee.local", "ugly-duckling-rs-test")?;
     let payload = "Hello, World!".as_bytes();
-    task::block_on(mqtt.publish("test", esp_idf_svc::mqtt::client::QoS::AtLeastOnce, false, payload))?;
+    task::block_on(mqtt.publish(
+        "test",
+        esp_idf_svc::mqtt::client::QoS::AtLeastOnce,
+        false,
+        payload,
+    ))?;
 
     log::info!("Entering idle loop...");
     task::block_on(pending::<()>());
