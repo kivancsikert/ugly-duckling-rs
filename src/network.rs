@@ -93,8 +93,7 @@ pub struct Service {
     pub port: u16,
 }
 
-pub fn query_mdns(service: &str, proto: &str) -> anyhow::Result<Option<Service>> {
-    let mdns = EspMdns::take()?;
+pub fn query_mdns(mdns: &EspMdns, service: &str, proto: &str) -> anyhow::Result<Option<Service>> {
     let mut results = [QueryResult {
         instance_name: None,
         hostname: None,
@@ -108,7 +107,7 @@ pub fn query_mdns(service: &str, proto: &str) -> anyhow::Result<Option<Service>>
     log::info!("MDNS query result: {:?}", results);
     let result = results[0].clone();
     Ok(result.hostname.map(|hostname| Service {
-        hostname,
+        hostname: format!("{}.local", hostname),
         port: result.port,
     }))
 }

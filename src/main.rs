@@ -1,6 +1,7 @@
 mod network;
 
 use esp_idf_svc::hal::task;
+use esp_idf_svc::mdns::EspMdns;
 use esp_idf_svc::sntp;
 use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
@@ -33,19 +34,36 @@ fn main() -> anyhow::Result<()> {
     let ip_info = wifi.sta_netif().get_ip_info()?;
     log::info!("WiFi DHCP info: {:?}", ip_info);
 
-    let _sntp = sntp::EspSntp::new_with_callback(&Default::default(), |duration| {
-        log::info!("SNTP time: {:?}", duration);
-    })?;
-    log::info!("Current time: {:?}", std::time::SystemTime::now());
+    let mdns = EspMdns::take()?;
 
-    let mqtt = query_mdns("_mqtt", "_tcp")?.unwrap_or_else(|| Service {
-        hostname: String::from("bumblebee"),
+    let ntp = query_mdns(&mdns, "_ntp", "_udp")?.unwrap_or_else(|| Service {
+        hostname: String::from("pool.ntp.org"),
+        port: 123,
+    });
+    log::info!(
+        "Time before SNTP sync: {:?}, synchronizing with {:?}",
+        std::time::SystemTime::now(),
+        ntp
+    );
+
+    let _sntp = sntp::EspSntp::new_with_callback(
+        &sntp::SntpConf {
+            servers: [ntp.hostname.as_str()],
+            ..Default::default()
+        },
+        |duration| {
+            log::info!("Time synced via SNTP: {:?}", duration);
+        },
+    )?;
+
+    let mqtt = query_mdns(&mdns, "_mqtt", "_tcp")?.unwrap_or_else(|| Service {
+        hostname: String::from("bumblebee.local"),
         port: 1883,
     });
     log::info!("MDNS query result: {:?}", mqtt);
 
     let (mut mqtt, _) = network::connect_mqtt(
-        &format!("mqtt://{}.local:{}", mqtt.hostname, mqtt.port),
+        &format!("mqtt://{}:{}", mqtt.hostname, mqtt.port),
         "ugly-duckling-rs-test",
     )?;
     let payload = "Hello via mDNS!".as_bytes();
