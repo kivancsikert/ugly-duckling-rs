@@ -26,12 +26,14 @@ fn main() -> anyhow::Result<()> {
     let nvs = EspDefaultNvsPartition::take()?;
 
     let wifi = task::block_on(network::connect_wifi(&sys_loop, &timer_service, &nvs))?;
-
     let ip_info = wifi.sta_netif().get_ip_info()?;
-    log::info!("Wifi DHCP info: {:?}", ip_info);
+    log::info!("WiFi DHCP info: {:?}", ip_info);
+
+    let (mut mqtt, _) = network::connect_mqtt("mqtt://bumblebee.local", "ugly-duckling-rs-test")?;
+    let payload = "Hello, World!".as_bytes();
+    task::block_on(mqtt.publish("test", esp_idf_svc::mqtt::client::QoS::AtLeastOnce, false, payload))?;
 
     log::info!("Entering idle loop...");
-
     task::block_on(pending::<()>());
     Ok(())
 }

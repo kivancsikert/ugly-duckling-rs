@@ -1,6 +1,9 @@
 use embedded_svc::wifi::{AuthMethod, ClientConfiguration, Configuration};
 
 use esp_idf_svc::hal::prelude::Peripherals;
+use esp_idf_svc::mqtt::client::{
+    EspAsyncMqttClient, EspAsyncMqttConnection, MqttClientConfiguration,
+};
 use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::wifi::{AsyncWifi, EspWifi};
 use esp_idf_svc::wifi::{WpsConfig, WpsFactoryInfo, WpsStatus, WpsType};
@@ -79,4 +82,19 @@ pub async fn connect_wifi(
     log::info!("Wifi netif up");
 
     Ok(esp_wifi)
+}
+
+pub fn connect_mqtt(
+    url: &str,
+    client_id: &str,
+) -> anyhow::Result<(EspAsyncMqttClient, EspAsyncMqttConnection)> {
+    let (mqtt_client, mqtt_conn) = EspAsyncMqttClient::new(
+        url,
+        &MqttClientConfiguration {
+            client_id: Some(client_id),
+            ..Default::default()
+        },
+    )?;
+
+    Ok((mqtt_client, mqtt_conn))
 }
