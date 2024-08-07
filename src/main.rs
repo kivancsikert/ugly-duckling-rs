@@ -1,9 +1,9 @@
 mod network;
 
 use embassy_executor::{Executor, Spawner};
-use esp_idf_hal::gpio::PinDriver;
+use embedded_hal_async::delay::DelayNs;
+use esp_idf_hal::gpio::{Gpio4, PinDriver};
 use esp_idf_hal::prelude::Peripherals;
-use esp_idf_svc::hal::task;
 use esp_idf_svc::mdns::EspMdns;
 use esp_idf_svc::sntp;
 use esp_idf_svc::timer::EspTaskTimerService;
@@ -40,25 +40,29 @@ fn main() -> anyhow::Result<()> {
 
 #[embassy_executor::task]
 async fn run(spawner: Spawner) {
-    run_with_errors(spawner).await.unwrap()
+    match run_with_errors(spawner).await {
+        Ok(_) => log::info!("Program exited cleanly"),
+        Err(error) => log::error!("Program exited with error: {:?}", error),
+    }
 }
 
-async fn run_with_errors(_spawner: Spawner) -> anyhow::Result<()> {
+async fn run_with_errors(spawner: Spawner) -> anyhow::Result<()> {
     let peripherals = Peripherals::take()?;
 
-    let mut status = PinDriver::output(peripherals.pins.gpio4)?;
-    status.set_low()?;
+    spawner
+        .spawn(blink(peripherals.pins.gpio4))
+        .map_err(|error| anyhow::anyhow!("Failed to spawn blink task: {:?}", error))?;
 
     let sys_loop = EspSystemEventLoop::take()?;
     let timer_service = EspTaskTimerService::new()?;
     let nvs = EspDefaultNvsPartition::take()?;
 
-    let wifi = task::block_on(network::connect_wifi(
+    let wifi = network::connect_wifi(
         peripherals.modem,
         &sys_loop,
         &timer_service,
         &nvs,
-    ))?;
+    ).await?;
     let ip_info = wifi.sta_netif().get_ip_info()?;
     log::info!("WiFi DHCP info: {:?}", ip_info);
 
@@ -95,18 +99,34 @@ async fn run_with_errors(_spawner: Spawner) -> anyhow::Result<()> {
         "ugly-duckling-rs-test",
     )?;
     let payload = "Hello via mDNS!".as_bytes();
-    task::block_on(mqtt.publish(
+    mqtt.publish(
         "test",
         esp_idf_svc::mqtt::client::QoS::AtLeastOnce,
         false,
         payload,
-    ))?;
+    ).await?;
 
     let uptime_us = unsafe { esp_idf_sys::esp_timer_get_time() };
     log::info!("Device started in {} ms", uptime_us as f64 / 1000.0);
-    status.set_high()?;
 
     log::info!("Entering idle loop...");
-    task::block_on(pending::<()>());
-    Ok(())
+    Ok(pending::<()>().await)
+}
+
+#[embassy_executor::task]
+async fn blink(gpio: Gpio4) {
+    log::info!("Blink task started");
+
+    let timer_service = EspTaskTimerService::new().unwrap();
+    let mut timer = timer_service.timer_async().unwrap();
+    let mut status = PinDriver::output(gpio).unwrap();
+    loop {
+        log::info!("Blinker off");
+        status.set_high().unwrap();
+        timer.delay_ms(1000).await;
+
+        log::info!("Blinker on");
+        status.set_low().unwrap();
+        timer.delay_ms(1000).await;
+    }
 }
