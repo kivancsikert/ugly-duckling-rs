@@ -57,12 +57,7 @@ async fn run_with_errors(spawner: Spawner) -> anyhow::Result<()> {
     let timer_service = EspTaskTimerService::new()?;
     let nvs = EspDefaultNvsPartition::take()?;
 
-    let wifi = network::connect_wifi(
-        peripherals.modem,
-        &sys_loop,
-        &timer_service,
-        &nvs,
-    ).await?;
+    let wifi = network::connect_wifi(peripherals.modem, &sys_loop, &timer_service, &nvs).await?;
     let ip_info = wifi.sta_netif().get_ip_info()?;
     log::info!("WiFi DHCP info: {:?}", ip_info);
 
@@ -104,7 +99,8 @@ async fn run_with_errors(spawner: Spawner) -> anyhow::Result<()> {
         esp_idf_svc::mqtt::client::QoS::AtLeastOnce,
         false,
         payload,
-    ).await?;
+    )
+    .await?;
 
     let uptime_us = unsafe { esp_idf_sys::esp_timer_get_time() };
     log::info!("Device started in {} ms", uptime_us as f64 / 1000.0);
