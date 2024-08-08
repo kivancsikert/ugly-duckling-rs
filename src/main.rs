@@ -15,6 +15,7 @@ use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 use network::{query_mdns, Service};
 use static_cell::StaticCell;
+use std::future::Future;
 
 static EXECUTOR: StaticCell<Executor> = StaticCell::new();
 
@@ -46,20 +47,19 @@ fn main() -> Result<()> {
 async fn run_tasks() {
     let peripherals = Peripherals::take().expect("Failed to take peripherals");
 
-    let blink_task = blink(peripherals.pins.gpio4.into());
-    let reset_watcher_task = reset_watcher(peripherals.pins.gpio0.downgrade());
-    let start_task = start_device(peripherals.modem);
+    join3(
+        async_task(blink(peripherals.pins.gpio4.into())),
+        async_task(reset_watcher(peripherals.pins.gpio0.downgrade())),
+        async_task(start_device(peripherals.modem)),
+    )
+    .await;
+}
 
-    match join3(blink_task, reset_watcher_task, start_task).await {
-        (Ok(_), Ok(_), Ok(_)) => log::info!("All tasks completed successfully"),
-        (blink_result, reset_result, start_result) => {
-            log::error!(
-                "Tasks failed: blink: {:?}, reset: {:?}, start: {:?}",
-                blink_result,
-                reset_result,
-                start_result
-            )
-        }
+async fn async_task<Fut: Future<Output = Result<()>>>(future: Fut) {
+    let result = future.await;
+    match result {
+        Ok(_) => log::info!("Task completed successfully"),
+        Err(e) => log::error!("Task failed with {:?}", e),
     }
 }
 
