@@ -44,21 +44,25 @@ fn main() -> Result<()> {
     });
 }
 
+macro_rules! task {
+    ($task:expr) => {
+        Box::pin(task($task)) as Pin<Box<dyn Future<Output = ()>>>
+    };
+}
+
 #[embassy_executor::task]
 async fn run_tasks() {
     let peripherals = Peripherals::take().expect("Failed to take peripherals");
 
     let tasks: [Pin<Box<dyn Future<Output = ()>>>; 3] = [
-        Box::pin(async_task(blink(peripherals.pins.gpio4.into()))),
-        Box::pin(async_task(reset_watcher(
-            peripherals.pins.gpio0.downgrade(),
-        ))),
-        Box::pin(async_task(start_device(peripherals.modem))),
+        task!(blink(peripherals.pins.gpio4.into())),
+        task!(reset_watcher(peripherals.pins.gpio0.downgrade())),
+        task!(start_device(peripherals.modem)),
     ];
     join_array(tasks).await;
 }
 
-async fn async_task<Fut: Future<Output = Result<()>>>(future: Fut) {
+async fn task<Fut: Future<Output = Result<()>>>(future: Fut) {
     let result = future.await;
     match result {
         Ok(_) => log::info!("Task completed successfully"),
