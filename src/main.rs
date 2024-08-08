@@ -1,9 +1,13 @@
 mod network;
 
-use embassy_executor::{Executor, Spawner};
+use anyhow::Result;
+use embassy_executor::Executor;
+use embassy_futures::join::join3;
 use embassy_futures::select::select;
+use embassy_futures::select::Either::First;
 use embedded_hal_async::delay::DelayNs;
 use esp_idf_hal::gpio::{AnyIOPin, AnyOutputPin, IOPin, PinDriver};
+use esp_idf_hal::modem::Modem;
 use esp_idf_hal::prelude::Peripherals;
 use esp_idf_svc::mdns::EspMdns;
 use esp_idf_svc::sntp;
@@ -11,12 +15,10 @@ use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 use network::{query_mdns, Service};
 use static_cell::StaticCell;
-use std::future::pending;
-use std::time::{Duration, Instant};
 
 static EXECUTOR: StaticCell<Executor> = StaticCell::new();
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<()> {
     // It is necessary to call this function once. Otherwise some patches to the runtime
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
     esp_idf_svc::sys::link_patches();
@@ -36,36 +38,37 @@ fn main() -> anyhow::Result<()> {
 
     let executor = EXECUTOR.init(Executor::new());
     executor.run(|spawner| {
-        spawner.spawn(run()).unwrap();
+        spawner.spawn(run_tasks()).unwrap();
     });
 }
 
 #[embassy_executor::task]
-async fn run() {
-    match run_with_errors().await {
-        Ok(_) => log::info!("Program exited cleanly"),
-        Err(error) => log::error!("Program exited with error: {:?}", error),
+async fn run_tasks() {
+    let peripherals = Peripherals::take().expect("Failed to take peripherals");
+
+    let blink_task = async { blink(peripherals.pins.gpio4.into()).await };
+    let reset_watcher_task = async { reset_watcher(peripherals.pins.gpio0.downgrade()).await };
+    let start_task = async { start_device(peripherals.modem).await };
+
+    match join3(blink_task, reset_watcher_task, start_task).await {
+        (Ok(_), Ok(_), Ok(_)) => log::info!("All tasks completed successfully"),
+        (blink_result, reset_result, start_result) => {
+            log::error!(
+                "Tasks failed: blink: {:?}, reset: {:?}, start: {:?}",
+                blink_result,
+                reset_result,
+                start_result
+            )
+        }
     }
 }
 
-async fn run_with_errors() -> anyhow::Result<()> {
-    let peripherals = Peripherals::take()?;
-
-    Spawner::for_current_executor()
-        .await
-        .spawn(blink(peripherals.pins.gpio4.into()))
-        .map_err(|error| anyhow::anyhow!("Failed to spawn blink task: {:?}", error))?;
-
-    Spawner::for_current_executor()
-        .await
-        .spawn(reset_watcher(peripherals.pins.gpio0.downgrade()))
-        .map_err(|error| anyhow::anyhow!("Failed to spawn blink task: {:?}", error))?;
-
+async fn start_device(modem: Modem) -> anyhow::Result<()> {
     let sys_loop = EspSystemEventLoop::take()?;
     let timer_service = EspTaskTimerService::new()?;
     let nvs = EspDefaultNvsPartition::take()?;
 
-    let wifi = network::connect_wifi(peripherals.modem, &sys_loop, &timer_service, &nvs).await?;
+    let wifi = network::connect_wifi(modem, &sys_loop, &timer_service, &nvs).await?;
     let ip_info = wifi.sta_netif().get_ip_info()?;
     log::info!("WiFi DHCP info: {:?}", ip_info);
 
@@ -114,28 +117,21 @@ async fn run_with_errors() -> anyhow::Result<()> {
     let uptime_us = unsafe { esp_idf_sys::esp_timer_get_time() };
     log::info!("Device started in {} ms", uptime_us as f64 / 1000.0);
 
-    log::info!("Entering idle loop...");
-    pending::<()>().await;
     Ok(())
 }
 
-#[embassy_executor::task]
-async fn reset_watcher(pin: AnyIOPin) {
-    let mut button = PinDriver::input(pin).unwrap();
-    button.set_pull(esp_idf_hal::gpio::Pull::Up).unwrap();
+async fn reset_watcher(pin: AnyIOPin) -> Result<()> {
+    let mut button = PinDriver::input(pin)?;
+    button.set_pull(esp_idf_hal::gpio::Pull::Up)?;
     log::info!("Factory reset watcher started");
     loop {
-        button.wait_for_low().await.unwrap();
-        let start = Instant::now();
+        button.wait_for_low().await?;
         log::info!("Button pressed, waiting for release");
 
-        let timer_service = EspTaskTimerService::new().unwrap();
-        let mut timer = timer_service.timer_async().unwrap();
+        let timer_service = EspTaskTimerService::new()?;
+        let mut timer = timer_service.timer_async()?;
 
-        select(timer.delay_ms(5000), button.wait_for_high()).await;
-
-        let end = Instant::now();
-        if end - start > Duration::from_secs(5) {
+        if let First(_) = select(timer.delay_ms(5000), button.wait_for_high()).await {
             log::info!("Button pressed for more than 5 seconds, resetting WiFi");
             unsafe { esp_idf_sys::esp_wifi_restore() };
             unsafe { esp_idf_sys::esp_restart() };
@@ -143,18 +139,17 @@ async fn reset_watcher(pin: AnyIOPin) {
     }
 }
 
-#[embassy_executor::task]
-async fn blink(pin: AnyOutputPin) {
+async fn blink(pin: AnyOutputPin) -> Result<()> {
     log::info!("Blink task started");
 
-    let timer_service = EspTaskTimerService::new().unwrap();
-    let mut timer = timer_service.timer_async().unwrap();
-    let mut status = PinDriver::output(pin).unwrap();
+    let timer_service = EspTaskTimerService::new()?;
+    let mut timer = timer_service.timer_async()?;
+    let mut status = PinDriver::output(pin)?;
     loop {
-        status.set_high().unwrap();
+        status.set_high()?;
         timer.delay_ms(1000).await;
 
-        status.set_low().unwrap();
+        status.set_low()?;
         timer.delay_ms(1000).await;
     }
 }
