@@ -70,7 +70,7 @@ async fn task<Fut: Future<Output = Result<()>>>(future: Fut) {
     };
 }
 
-async fn start_device(modem: Modem) -> anyhow::Result<()> {
+async fn start_device(modem: Modem) -> Result<()> {
     let sys_loop = EspSystemEventLoop::take()?;
     let timer_service = EspTaskTimerService::new()?;
     let nvs = EspDefaultNvsPartition::take()?;
