@@ -2,7 +2,7 @@ mod network;
 
 use anyhow::Result;
 use embassy_executor::Executor;
-use embassy_futures::join::join3;
+use embassy_futures::join::join_array;
 use embassy_futures::select::select;
 use embassy_futures::select::Either::First;
 use embedded_hal_async::delay::DelayNs;
@@ -15,7 +15,8 @@ use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 use network::{query_mdns, Service};
 use static_cell::StaticCell;
-use std::future::Future;
+use std::future::{pending, Future};
+use std::pin::Pin;
 
 static EXECUTOR: StaticCell<Executor> = StaticCell::new();
 
@@ -47,12 +48,14 @@ fn main() -> Result<()> {
 async fn run_tasks() {
     let peripherals = Peripherals::take().expect("Failed to take peripherals");
 
-    join3(
-        async_task(blink(peripherals.pins.gpio4.into())),
-        async_task(reset_watcher(peripherals.pins.gpio0.downgrade())),
-        async_task(start_device(peripherals.modem)),
-    )
-    .await;
+    let tasks: [Pin<Box<dyn Future<Output = ()>>>; 3] = [
+        Box::pin(async_task(blink(peripherals.pins.gpio4.into()))),
+        Box::pin(async_task(reset_watcher(
+            peripherals.pins.gpio0.downgrade(),
+        ))),
+        Box::pin(async_task(start_device(peripherals.modem))),
+    ];
+    join_array(tasks).await;
 }
 
 async fn async_task<Fut: Future<Output = Result<()>>>(future: Fut) {
@@ -60,7 +63,7 @@ async fn async_task<Fut: Future<Output = Result<()>>>(future: Fut) {
     match result {
         Ok(_) => log::info!("Task completed successfully"),
         Err(e) => log::error!("Task failed with {:?}", e),
-    }
+    };
 }
 
 async fn start_device(modem: Modem) -> anyhow::Result<()> {
@@ -117,6 +120,8 @@ async fn start_device(modem: Modem) -> anyhow::Result<()> {
     let uptime_us = unsafe { esp_idf_sys::esp_timer_get_time() };
     log::info!("Device started in {} ms", uptime_us as f64 / 1000.0);
 
+    log::info!("Entering idle loop...");
+    pending::<()>().await;
     Ok(())
 }
 
