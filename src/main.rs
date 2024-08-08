@@ -5,7 +5,7 @@ use embassy_executor::Executor;
 use embassy_futures::join::join_array;
 use embassy_futures::select::select;
 use embassy_futures::select::Either::First;
-use embedded_hal_async::delay::DelayNs;
+use embassy_time::Timer;
 use esp_idf_hal::gpio::{AnyIOPin, AnyOutputPin, IOPin, PinDriver};
 use esp_idf_hal::modem::Modem;
 use esp_idf_hal::prelude::Peripherals;
@@ -137,10 +137,7 @@ async fn reset_watcher(pin: AnyIOPin) -> Result<()> {
         button.wait_for_low().await?;
         log::info!("Button pressed, waiting for release");
 
-        let timer_service = EspTaskTimerService::new()?;
-        let mut timer = timer_service.timer_async()?;
-
-        if let First(_) = select(timer.delay_ms(5000), button.wait_for_high()).await {
+        if let First(_) = select(Timer::after_secs(5), button.wait_for_high()).await {
             log::info!("Button pressed for more than 5 seconds, resetting WiFi");
             unsafe { esp_idf_sys::esp_wifi_restore() };
             unsafe { esp_idf_sys::esp_restart() };
@@ -151,14 +148,12 @@ async fn reset_watcher(pin: AnyIOPin) -> Result<()> {
 async fn blink(pin: AnyOutputPin) -> Result<()> {
     log::info!("Blink task started");
 
-    let timer_service = EspTaskTimerService::new()?;
-    let mut timer = timer_service.timer_async()?;
     let mut status = PinDriver::output(pin)?;
     loop {
         status.set_high()?;
-        timer.delay_ms(1000).await;
+        Timer::after_secs(1).await;
 
         status.set_low()?;
-        timer.delay_ms(1000).await;
+        Timer::after_secs(1).await;
     }
 }
