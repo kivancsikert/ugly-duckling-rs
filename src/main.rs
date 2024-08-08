@@ -1,7 +1,6 @@
 mod network;
 
 use anyhow::Result;
-use embassy_executor::Executor;
 use embassy_futures::join::join_array;
 use embassy_futures::select::select;
 use embassy_futures::select::Either::First;
@@ -9,16 +8,14 @@ use embassy_time::Timer;
 use esp_idf_hal::gpio::{AnyIOPin, AnyOutputPin, IOPin, PinDriver};
 use esp_idf_hal::modem::Modem;
 use esp_idf_hal::prelude::Peripherals;
+use esp_idf_hal::task::block_on;
 use esp_idf_svc::mdns::EspMdns;
 use esp_idf_svc::sntp;
 use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 use network::{query_mdns, Service};
-use static_cell::StaticCell;
 use std::future::{pending, Future};
 use std::pin::Pin;
-
-static EXECUTOR: StaticCell<Executor> = StaticCell::new();
 
 fn main() -> Result<()> {
     // It is necessary to call this function once. Otherwise some patches to the runtime
@@ -38,10 +35,8 @@ fn main() -> Result<()> {
         env!("GIT_VERSION")
     );
 
-    let executor = EXECUTOR.init(Executor::new());
-    executor.run(|spawner| {
-        spawner.spawn(run_tasks()).unwrap();
-    });
+    block_on(run_tasks());
+    Ok(())
 }
 
 macro_rules! task {
@@ -50,7 +45,6 @@ macro_rules! task {
     };
 }
 
-#[embassy_executor::task]
 async fn run_tasks() {
     let peripherals = Peripherals::take().expect("Failed to take peripherals");
 
