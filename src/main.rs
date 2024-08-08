@@ -46,9 +46,9 @@ fn main() -> Result<()> {
 async fn run_tasks() {
     let peripherals = Peripherals::take().expect("Failed to take peripherals");
 
-    let blink_task = async { blink(peripherals.pins.gpio4.into()).await };
-    let reset_watcher_task = async { reset_watcher(peripherals.pins.gpio0.downgrade()).await };
-    let start_task = async { start_device(peripherals.modem).await };
+    let blink_task = blink(peripherals.pins.gpio4.into());
+    let reset_watcher_task = reset_watcher(peripherals.pins.gpio0.downgrade());
+    let start_task = start_device(peripherals.modem);
 
     match join3(blink_task, reset_watcher_task, start_task).await {
         (Ok(_), Ok(_), Ok(_)) => log::info!("All tasks completed successfully"),
