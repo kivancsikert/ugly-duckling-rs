@@ -1,16 +1,14 @@
 mod network;
 
 use anyhow::Result;
-use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::channel::Channel;
-use embassy_sync::channel::Receiver;
-use embassy_sync::channel::Sender;
+use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use esp_idf_hal::modem::Modem;
 use esp_idf_svc::mdns::EspMdns;
 use esp_idf_svc::mqtt::client::EspAsyncMqttClient;
+use esp_idf_svc::mqtt::client::EspAsyncMqttConnection;
 use esp_idf_svc::sntp::{self, EspSntp};
 use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::wifi::EspWifi;
@@ -19,24 +17,14 @@ use esp_idf_sys::{esp_pm_config_esp32_t, esp_pm_configure};
 use network::{query_mdns, Service};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use static_cell::StaticCell;
 use std::ffi::c_void;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::UNIX_EPOCH;
 
 // TODO Configure these per device model
 const MAX_FREQ_MHZ: i32 = 160;
 const MIN_FREQ_MHZ: i32 = 40;
-
-struct MqttMessage {
-    topic: String,
-    payload: Value,
-}
-
-const MQTT_QUEUE_SIZE: usize = 16;
-type MqttPublishChannel = Channel<CriticalSectionRawMutex, MqttMessage, MQTT_QUEUE_SIZE>;
-type MqttPublisher = Sender<'static, CriticalSectionRawMutex, MqttMessage, MQTT_QUEUE_SIZE>;
-type MqttPublishReceiver = Receiver<'static, CriticalSectionRawMutex, MqttMessage, MQTT_QUEUE_SIZE>;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct DeviceConfig {
@@ -50,7 +38,9 @@ pub struct Device {
     pub config: DeviceConfig,
     _wifi: EspWifi<'static>,
     _sntp: EspSntp<'static>,
-    mqtt_publisher: MqttPublisher,
+    mqtt: Arc<Mutex<CriticalSectionRawMutex, EspAsyncMqttClient>>,
+    //    conn: EspAsyncMqttConnection,
+    topic_root: String,
 }
 
 impl Device {
@@ -80,24 +70,34 @@ impl Device {
 
         // TODO Use some async mDNS instead to avoid blocking the executor
         let mdns = EspMdns::take()?;
-        let (sntp, mqtt_publisher) =
-            join(init_rtc(&mdns), init_mqtt(&mdns, &config.instance)).await;
+        let (sntp, mqtts) = join(init_rtc(&mdns), init_mqtt(&mdns, &config.instance)).await;
+        let (mqtt, _, topic_root) = mqtts?;
+
+        // TODO Figure out how to avoid this warning
+        #[allow(clippy::arc_with_non_send_sync)]
+        let mqtt = Arc::new(Mutex::new(mqtt));
 
         Ok(Self {
             config,
             _wifi: wifi,
             _sntp: sntp?,
-            mqtt_publisher: mqtt_publisher?,
+            mqtt,
+            topic_root,
         })
     }
 
     pub async fn publish_mqtt(&self, topic: &str, payload: Value) -> Result<()> {
-        self.mqtt_publisher
-            .send(MqttMessage {
-                topic: topic.to_string(),
-                payload,
-            })
-            .await;
+        let topic = format!("{}/{}", self.topic_root, topic);
+        self.mqtt
+            .lock()
+            .await
+            .publish(
+                &topic,
+                esp_idf_svc::mqtt::client::QoS::AtMostOnce,
+                false,
+                payload.to_string().as_bytes(),
+            )
+            .await?;
         Ok(())
     }
 }
@@ -139,52 +139,23 @@ async fn init_rtc(mdns: &EspMdns) -> Result<EspSntp<'static>> {
     Ok(sntp)
 }
 
-async fn init_mqtt(mdns: &EspMdns, instance: &str) -> Result<MqttPublisher> {
+async fn init_mqtt(
+    mdns: &EspMdns,
+    instance: &str,
+) -> Result<(EspAsyncMqttClient, EspAsyncMqttConnection, String)> {
     let mqtt = query_mdns(mdns, "_mqtt", "_tcp")?.unwrap_or_else(|| Service {
         hostname: String::from("bumblebee.local"),
         port: 1883,
     });
     log::info!("MDNS query result: {:?}", mqtt);
 
-    let (mqtt, _) =
+    let (mqtt, conn) =
         network::connect_mqtt(&format!("mqtt://{}:{}", mqtt.hostname, mqtt.port), instance)
             .expect("Couldn't connect to MQTT");
-    static MQTT: StaticCell<EspAsyncMqttClient> = StaticCell::new();
-    let mqtt = MQTT.init(mqtt);
 
-    static MQTT_PUBLISH_QUEUE: StaticCell<MqttPublishChannel> = StaticCell::new();
-    let publish_queue = MQTT_PUBLISH_QUEUE.init(MqttPublishChannel::new());
     let topic_root = format!("devices/ugly-duckling/{}", instance);
 
-    Spawner::for_current_executor()
-        .await
-        .spawn(mqtt_publish_queue_task(
-            mqtt,
-            topic_root,
-            publish_queue.receiver(),
-        ))
-        .expect("Couldn't start MQTT queue");
-
-    Ok(publish_queue.sender())
-}
-
-#[embassy_executor::task]
-async fn mqtt_publish_queue_task(
-    mqtt: &'static mut EspAsyncMqttClient,
-    topic_root: String,
-    queue: MqttPublishReceiver,
-) {
-    loop {
-        let message = queue.receive().await;
-        mqtt.publish(
-            &format!("{}/{}", &topic_root, &message.topic),
-            esp_idf_svc::mqtt::client::QoS::AtLeastOnce,
-            false,
-            message.payload.to_string().as_bytes(),
-        )
-        .await
-        .expect("Failed to publish message");
-    }
+    Ok((mqtt, conn, topic_root))
 }
 
 fn load_device_config() -> Result<DeviceConfig> {
