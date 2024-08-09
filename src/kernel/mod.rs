@@ -10,6 +10,7 @@ use esp_idf_svc::wifi::EspWifi;
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 use network::{query_mdns, Service};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::cell::RefCell;
 
 pub struct Device {
@@ -87,7 +88,11 @@ impl Device {
         })
     }
 
-    pub async fn publish_mqtt(&self, topic: &str, payload: &str) -> Result<MessageId> {
+    pub async fn publish_mqtt(&self, topic: &str, payload: Value) -> Result<MessageId> {
+        self.publish_mqtt_internal(topic, &payload.to_string()).await
+    }
+
+    async fn publish_mqtt_internal(&self, topic: &str, payload: &str) -> Result<MessageId> {
         let result = self
             .mqtt
             .borrow_mut()
