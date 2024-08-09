@@ -68,7 +68,9 @@ async fn task<Fut: Future<Output = Result<()>>>(future: Fut) {
 
 async fn start_device(modem: Modem) -> Result<()> {
     let device = kernel::Device::init(modem).await?;
-    log::info!("Device started");
+
+    let uptime_us = unsafe { esp_idf_sys::esp_timer_get_time() };
+    log::info!("Device started in {} ms", uptime_us as f64 / 1000.0);
 
     device.publish_mqtt("init", json!({
         "type": "ugly-duckling",

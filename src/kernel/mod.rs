@@ -2,6 +2,7 @@ mod network;
 
 use anyhow::Result;
 use embassy_executor::Spawner;
+use embassy_futures::join::join;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::channel::Receiver;
@@ -49,7 +50,7 @@ pub struct Device {
     pub config: DeviceConfig,
     _wifi: EspWifi<'static>,
     _sntp: EspSntp<'static>,
-    mqtt_queue: MqttPublisher,
+    mqtt_publisher: MqttPublisher,
 }
 
 impl Device {
@@ -79,42 +80,19 @@ impl Device {
 
         // TODO Use some async mDNS instead to avoid blocking the executor
         let mdns = EspMdns::take()?;
-
-        let sntp = init_rtc(&mdns).await?;
-
-        let mqtt = query_mdns(&mdns, "_mqtt", "_tcp")?.unwrap_or_else(|| Service {
-            hostname: String::from("bumblebee.local"),
-            port: 1883,
-        });
-        log::info!("MDNS query result: {:?}", mqtt);
-
-        static MQTT_PUBLISH_QUEUE: StaticCell<MqttPublishChannel> = StaticCell::new();
-        let mqtt_publisher = MQTT_PUBLISH_QUEUE.init(MqttPublishChannel::new());
-        let topic_root = format!("devices/ugly-duckling/{}", config.instance);
-
-        Spawner::for_current_executor()
-            .await
-            .spawn(mqtt_publish_queue(
-                mqtt,
-                config.instance.clone(),
-                topic_root,
-                mqtt_publisher.receiver(),
-            ))
-            .expect("Couldn't start MQTT queue");
-
-        let uptime_us = unsafe { esp_idf_sys::esp_timer_get_time() };
-        log::info!("Device started in {} ms", uptime_us as f64 / 1000.0);
+        let (sntp, mqtt_publisher) =
+            join(init_rtc(&mdns), init_mqtt(&mdns, &config.instance)).await;
 
         Ok(Self {
             config,
             _wifi: wifi,
-            _sntp: sntp,
-            mqtt_queue: mqtt_publisher.sender(),
+            _sntp: sntp?,
+            mqtt_publisher: mqtt_publisher?,
         })
     }
 
     pub async fn publish_mqtt(&self, topic: &str, payload: Value) -> Result<()> {
-        self.mqtt_queue
+        self.mqtt_publisher
             .send(MqttMessage {
                 topic: topic.to_string(),
                 payload,
@@ -129,9 +107,10 @@ async fn init_rtc(mdns: &EspMdns) -> Result<EspSntp<'static>> {
         hostname: String::from("pool.ntp.org"),
         port: 123,
     });
+
     log::info!(
         "Time before SNTP sync: {:?}, synchronizing with {:?}",
-        Instant::now(),
+        std::time::SystemTime::now(),
         ntp
     );
 
@@ -160,8 +139,32 @@ async fn init_rtc(mdns: &EspMdns) -> Result<EspSntp<'static>> {
     Ok(sntp)
 }
 
+async fn init_mqtt(mdns: &EspMdns, instance: &str) -> Result<MqttPublisher> {
+    let mqtt = query_mdns(mdns, "_mqtt", "_tcp")?.unwrap_or_else(|| Service {
+        hostname: String::from("bumblebee.local"),
+        port: 1883,
+    });
+    log::info!("MDNS query result: {:?}", mqtt);
+
+    static MQTT_PUBLISH_QUEUE: StaticCell<MqttPublishChannel> = StaticCell::new();
+    let publish_queue = MQTT_PUBLISH_QUEUE.init(MqttPublishChannel::new());
+    let topic_root = format!("devices/ugly-duckling/{}", instance);
+
+    Spawner::for_current_executor()
+        .await
+        .spawn(mqtt_publish_queue_task(
+            mqtt,
+            instance.to_string(),
+            topic_root,
+            publish_queue.receiver(),
+        ))
+        .expect("Couldn't start MQTT queue");
+
+    Ok(publish_queue.sender())
+}
+
 #[embassy_executor::task]
-async fn mqtt_publish_queue(
+async fn mqtt_publish_queue_task(
     mqtt: Service,
     client_id: String,
     topic_root: String,
