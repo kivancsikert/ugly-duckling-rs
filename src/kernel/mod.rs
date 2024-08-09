@@ -7,7 +7,6 @@ use embassy_sync::channel::Channel;
 use embassy_sync::channel::Receiver;
 use embassy_sync::channel::Sender;
 use embassy_sync::signal::Signal;
-use embassy_time::Instant;
 use esp_idf_hal::modem::Modem;
 use esp_idf_svc::mdns::EspMdns;
 use esp_idf_svc::sntp::{self, EspSntp};
@@ -20,6 +19,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use static_cell::StaticCell;
 use std::ffi::c_void;
+use std::time::Duration;
+use std::time::UNIX_EPOCH;
 
 // TODO Configure these per device model
 const MAX_FREQ_MHZ: i32 = 160;
@@ -148,8 +149,13 @@ async fn init_rtc(mdns: &EspMdns) -> Result<EspSntp<'static>> {
     // When the RTC is not initialized, the MCU boots with a time of 0;
     // if we are much "later" then it means the RTC has been initialized
     // at some point in the past
-    if Instant::now() < Instant::from_secs((2022 - 1970) * 365 * 24 * 60 * 60) {
+    if std::time::SystemTime::now()
+        < UNIX_EPOCH + Duration::from_secs((2022 - 1970) * 365 * 24 * 60 * 60)
+    {
+        log::info!("RTC is not initialized, waiting for SNTP sync");
         SNTP_UPDATED.wait().await;
+    } else {
+        log::info!("RTC seems to be initialized already, not waiting for SNTP sync");
     }
     Ok(sntp)
 }
