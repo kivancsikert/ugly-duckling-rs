@@ -1,6 +1,7 @@
 mod network;
 
 use anyhow::Result;
+use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
@@ -9,6 +10,7 @@ use esp_idf_hal::modem::Modem;
 use esp_idf_svc::mdns::EspMdns;
 use esp_idf_svc::mqtt::client::EspAsyncMqttClient;
 use esp_idf_svc::mqtt::client::EspAsyncMqttConnection;
+use esp_idf_svc::mqtt::client::EventPayload;
 use esp_idf_svc::sntp::{self, EspSntp};
 use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::wifi::EspWifi;
@@ -39,7 +41,7 @@ pub struct Device {
     _wifi: EspWifi<'static>,
     _sntp: EspSntp<'static>,
     mqtt: Arc<Mutex<CriticalSectionRawMutex, EspAsyncMqttClient>>,
-    //    conn: EspAsyncMqttConnection,
+    _conn: Arc<Mutex<CriticalSectionRawMutex, EspAsyncMqttConnection>>,
     topic_root: String,
 }
 
@@ -71,17 +73,27 @@ impl Device {
         // TODO Use some async mDNS instead to avoid blocking the executor
         let mdns = EspMdns::take()?;
         let (sntp, mqtts) = join(init_rtc(&mdns), init_mqtt(&mdns, &config.instance)).await;
-        let (mqtt, _, topic_root) = mqtts?;
+        let (mqtt, conn, topic_root) = mqtts?;
 
         // TODO Figure out how to avoid this warning
         #[allow(clippy::arc_with_non_send_sync)]
         let mqtt = Arc::new(Mutex::new(mqtt));
+        // TODO Figure out how to avoid this warning
+        #[allow(clippy::arc_with_non_send_sync)]
+        let conn = Arc::new(Mutex::new(conn));
+
+        Spawner::for_current_executor()
+            .await
+            .spawn(handle_mqtt_events(conn.clone()))
+            .expect("Couldn't spawn MQTT handler");
 
         Ok(Self {
             config,
             _wifi: wifi,
             _sntp: sntp?,
             mqtt,
+            // TODO Do we need to keep this alive?
+            _conn: conn,
             topic_root,
         })
     }
@@ -156,6 +168,37 @@ async fn init_mqtt(
     let topic_root = format!("devices/ugly-duckling/{}", instance);
 
     Ok((mqtt, conn, topic_root))
+}
+
+#[embassy_executor::task]
+async fn handle_mqtt_events(conn: Arc<Mutex<CriticalSectionRawMutex, EspAsyncMqttConnection>>) {
+    let mut conn = conn.lock().await;
+    loop {
+        let event = conn.next().await.expect("Cannot receive message");
+        match event.payload() {
+            EventPayload::Received {
+                id,
+                topic,
+                data,
+                details,
+            } => {
+                log::info!(
+                    "Received message with ID {} on topic {:?}: {:?}; details: {:?}",
+                    id,
+                    topic,
+                    std::str::from_utf8(data),
+                    details
+                );
+            }
+            EventPayload::Disconnected => {
+                log::info!("Disconnected from MQTT broker");
+                // TODO Reconnect
+            }
+            _ => {
+                log::info!("Received event: {:?}", event.payload());
+            }
+        }
+    }
 }
 
 fn load_device_config() -> Result<DeviceConfig> {
