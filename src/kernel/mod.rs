@@ -1,29 +1,23 @@
 mod network;
 
 use anyhow::Result;
-use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
-use embassy_sync::signal::Signal;
 use esp_idf_hal::modem::Modem;
 use esp_idf_svc::mdns::EspMdns;
 use esp_idf_svc::mqtt::client::EspAsyncMqttClient;
 use esp_idf_svc::mqtt::client::EspAsyncMqttConnection;
-use esp_idf_svc::mqtt::client::EventPayload;
 use esp_idf_svc::mqtt::client::QoS;
-use esp_idf_svc::sntp::{self, EspSntp};
+use esp_idf_svc::sntp::EspSntp;
 use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::wifi::EspWifi;
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 use esp_idf_sys::{esp_pm_config_esp32_t, esp_pm_configure};
-use network::{query_mdns, Service};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::ffi::c_void;
 use std::sync::Arc;
-use std::time::Duration;
-use std::time::UNIX_EPOCH;
 
 // TODO Configure these per device model
 const MAX_FREQ_MHZ: i32 = 160;
@@ -73,23 +67,16 @@ impl Device {
 
         // TODO Use some async mDNS instead to avoid blocking the executor
         let mdns = EspMdns::take()?;
-        let (sntp, mqtts) = join(init_rtc(&mdns), init_mqtt(&mdns, &config.instance)).await;
+        let (sntp, mqtts) = join(
+            network::init_rtc(&mdns),
+            network::init_mqtt(&mdns, &config.instance),
+        )
+        .await;
         let (mqtt, conn, topic_root) = mqtts?;
 
         // TODO Figure out how to avoid this warning
         #[allow(clippy::arc_with_non_send_sync)]
         let mqtt = Arc::new(Mutex::new(mqtt));
-        // TODO Figure out how to avoid this warning
-        #[allow(clippy::arc_with_non_send_sync)]
-        let conn = Arc::new(Mutex::new(conn));
-
-        // TODO Need something more robust than this, but for the time being it will do
-        let connected = Arc::new(Signal::<CriticalSectionRawMutex, ()>::new());
-        Spawner::for_current_executor()
-            .await
-            .spawn(handle_mqtt_events(conn.clone(), connected.clone()))
-            .expect("Couldn't spawn MQTT handler");
-        connected.wait().await;
 
         Ok(Self {
             config,
@@ -125,103 +112,6 @@ impl Device {
             .subscribe(&topic, QoS::AtMostOnce)
             .await?;
         Ok(())
-    }
-}
-
-async fn init_rtc(mdns: &EspMdns) -> Result<EspSntp<'static>> {
-    let ntp = query_mdns(mdns, "_ntp", "_udp")?.unwrap_or_else(|| Service {
-        hostname: String::from("pool.ntp.org"),
-        port: 123,
-    });
-
-    log::info!(
-        "Time before SNTP sync: {:?}, synchronizing with {:?}",
-        std::time::SystemTime::now(),
-        ntp
-    );
-
-    static SNTP_UPDATED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
-    let sntp = sntp::EspSntp::new_with_callback(
-        &sntp::SntpConf {
-            servers: [ntp.hostname.as_str()],
-            ..Default::default()
-        },
-        |synced_time| {
-            SNTP_UPDATED.signal(());
-            log::info!("Time synced via SNTP: {:?}", synced_time);
-        },
-    )?;
-    // When the RTC is not initialized, the MCU boots with a time of 0;
-    // if we are much "later" then it means the RTC has been initialized
-    // at some point in the past
-    if std::time::SystemTime::now()
-        < UNIX_EPOCH + Duration::from_secs((2022 - 1970) * 365 * 24 * 60 * 60)
-    {
-        log::info!("RTC is not initialized, waiting for SNTP sync");
-        SNTP_UPDATED.wait().await;
-    } else {
-        log::info!("RTC seems to be initialized already, not waiting for SNTP sync");
-    }
-    Ok(sntp)
-}
-
-async fn init_mqtt(
-    mdns: &EspMdns,
-    instance: &str,
-) -> Result<(EspAsyncMqttClient, EspAsyncMqttConnection, String)> {
-    let mqtt = query_mdns(mdns, "_mqtt", "_tcp")?.unwrap_or_else(|| Service {
-        hostname: String::from("bumblebee.local"),
-        port: 1883,
-    });
-    log::info!("MDNS query result: {:?}", mqtt);
-
-    let (mqtt, conn) =
-        network::connect_mqtt(&format!("mqtt://{}:{}", mqtt.hostname, mqtt.port), instance)
-            .expect("Couldn't connect to MQTT");
-
-    let topic_root = format!("devices/ugly-duckling/{}", instance);
-
-    Ok((mqtt, conn, topic_root))
-}
-
-#[embassy_executor::task]
-async fn handle_mqtt_events(
-    conn: Arc<Mutex<CriticalSectionRawMutex, EspAsyncMqttConnection>>,
-    connected: Arc<Signal<CriticalSectionRawMutex, ()>>,
-) {
-    let mut conn = conn.lock().await;
-    loop {
-        let event = conn.next().await.expect("Cannot receive message");
-        match event.payload() {
-            EventPayload::Received {
-                id,
-                topic,
-                data,
-                details,
-            } => {
-                log::info!(
-                    "Received message with ID {} on topic {:?}: {:?}; details: {:?}",
-                    id,
-                    topic,
-                    std::str::from_utf8(data),
-                    details
-                );
-            }
-            EventPayload::Connected(session_present) => {
-                log::info!(
-                    "Connected to MQTT broker (session present: {})",
-                    session_present
-                );
-                connected.signal(());
-            }
-            EventPayload::Disconnected => {
-                log::info!("Disconnected from MQTT broker");
-                // TODO Reconnect
-            }
-            _ => {
-                log::info!("Received event: {:?}", event.payload());
-            }
-        }
     }
 }
 
