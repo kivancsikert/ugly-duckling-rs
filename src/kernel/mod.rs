@@ -83,10 +83,13 @@ impl Device {
         #[allow(clippy::arc_with_non_send_sync)]
         let conn = Arc::new(Mutex::new(conn));
 
+        // TODO Need something more robust than this, but for the time being it will do
+        let connected = Arc::new(Signal::<CriticalSectionRawMutex, ()>::new());
         Spawner::for_current_executor()
             .await
-            .spawn(handle_mqtt_events(conn.clone()))
+            .spawn(handle_mqtt_events(conn.clone(), connected.clone()))
             .expect("Couldn't spawn MQTT handler");
+        connected.wait().await;
 
         Ok(Self {
             config,
@@ -182,7 +185,10 @@ async fn init_mqtt(
 }
 
 #[embassy_executor::task]
-async fn handle_mqtt_events(conn: Arc<Mutex<CriticalSectionRawMutex, EspAsyncMqttConnection>>) {
+async fn handle_mqtt_events(
+    conn: Arc<Mutex<CriticalSectionRawMutex, EspAsyncMqttConnection>>,
+    connected: Arc<Signal<CriticalSectionRawMutex, ()>>,
+) {
     let mut conn = conn.lock().await;
     loop {
         let event = conn.next().await.expect("Cannot receive message");
@@ -200,6 +206,13 @@ async fn handle_mqtt_events(conn: Arc<Mutex<CriticalSectionRawMutex, EspAsyncMqt
                     std::str::from_utf8(data),
                     details
                 );
+            }
+            EventPayload::Connected(session_present) => {
+                log::info!(
+                    "Connected to MQTT broker (session present: {})",
+                    session_present
+                );
+                connected.signal(());
             }
             EventPayload::Disconnected => {
                 log::info!("Disconnected from MQTT broker");
