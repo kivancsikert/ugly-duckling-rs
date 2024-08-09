@@ -2,10 +2,12 @@ mod network;
 
 use anyhow::Result;
 use embassy_executor::Spawner;
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::channel::Receiver;
 use embassy_sync::channel::Sender;
+use embassy_sync::signal::Signal;
+use embassy_time::Instant;
 use esp_idf_hal::modem::Modem;
 use esp_idf_svc::mdns::EspMdns;
 use esp_idf_svc::sntp::{self, EspSntp};
@@ -42,10 +44,10 @@ pub struct Device {
     pub config: DeviceConfig,
     _wifi: EspWifi<'static>,
     _sntp: EspSntp<'static>,
-    mqtt_queue: Sender<'static, NoopRawMutex, MqttMessage, MQTT_QUEUE_SIZE>,
+    mqtt_queue: Sender<'static, CriticalSectionRawMutex, MqttMessage, MQTT_QUEUE_SIZE>,
 }
 
-static MQTT_QUEUE: StaticCell<Channel<NoopRawMutex, MqttMessage, MQTT_QUEUE_SIZE>> =
+static MQTT_QUEUE: StaticCell<Channel<CriticalSectionRawMutex, MqttMessage, MQTT_QUEUE_SIZE>> =
     StaticCell::new();
 
 impl Device {
@@ -76,25 +78,7 @@ impl Device {
         // TODO Use some async mDNS instead to avoid blocking the executor
         let mdns = EspMdns::take()?;
 
-        let ntp = query_mdns(&mdns, "_ntp", "_udp")?.unwrap_or_else(|| Service {
-            hostname: String::from("pool.ntp.org"),
-            port: 123,
-        });
-        log::info!(
-            "Time before SNTP sync: {:?}, synchronizing with {:?}",
-            std::time::SystemTime::now(),
-            ntp
-        );
-
-        let sntp = sntp::EspSntp::new_with_callback(
-            &sntp::SntpConf {
-                servers: [ntp.hostname.as_str()],
-                ..Default::default()
-            },
-            |synced_time| {
-                log::info!("Time synced via SNTP: {:?}", synced_time);
-            },
-        )?;
+        let sntp = init_rtc(&mdns).await?;
 
         let mqtt = query_mdns(&mdns, "_mqtt", "_tcp")?.unwrap_or_else(|| Service {
             hostname: String::from("bumblebee.local"),
@@ -137,12 +121,43 @@ impl Device {
     }
 }
 
+async fn init_rtc(mdns: &EspMdns) -> Result<EspSntp<'static>> {
+    let ntp = query_mdns(mdns, "_ntp", "_udp")?.unwrap_or_else(|| Service {
+        hostname: String::from("pool.ntp.org"),
+        port: 123,
+    });
+    log::info!(
+        "Time before SNTP sync: {:?}, synchronizing with {:?}",
+        Instant::now(),
+        ntp
+    );
+
+    static SNTP_UPDATED: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+    let sntp = sntp::EspSntp::new_with_callback(
+        &sntp::SntpConf {
+            servers: [ntp.hostname.as_str()],
+            ..Default::default()
+        },
+        |synced_time| {
+            SNTP_UPDATED.signal(());
+            log::info!("Time synced via SNTP: {:?}", synced_time);
+        },
+    )?;
+    // When the RTC is not initialized, the MCU boots with a time of 0;
+    // if we are much "later" then it means the RTC has been initialized
+    // at some point in the past
+    if Instant::now() < Instant::from_secs((2022 - 1970) * 365 * 24 * 60 * 60) {
+        SNTP_UPDATED.wait().await;
+    }
+    Ok(sntp)
+}
+
 #[embassy_executor::task]
 async fn mqtt_queue(
     mqtt: Service,
     client_id: String,
     topic_root: String,
-    queue: Receiver<'static, NoopRawMutex, MqttMessage, MQTT_QUEUE_SIZE>,
+    queue: Receiver<'static, CriticalSectionRawMutex, MqttMessage, MQTT_QUEUE_SIZE>,
 ) {
     let (mut mqtt, _) = network::connect_mqtt(
         &format!("mqtt://{}:{}", mqtt.hostname, mqtt.port),
