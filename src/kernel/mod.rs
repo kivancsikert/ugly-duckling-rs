@@ -11,6 +11,7 @@ use esp_idf_svc::mdns::EspMdns;
 use esp_idf_svc::mqtt::client::EspAsyncMqttClient;
 use esp_idf_svc::mqtt::client::EspAsyncMqttConnection;
 use esp_idf_svc::mqtt::client::EventPayload;
+use esp_idf_svc::mqtt::client::QoS;
 use esp_idf_svc::sntp::{self, EspSntp};
 use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::wifi::EspWifi;
@@ -105,10 +106,20 @@ impl Device {
             .await
             .publish(
                 &topic,
-                esp_idf_svc::mqtt::client::QoS::AtMostOnce,
+                QoS::AtMostOnce,
                 false,
                 payload.to_string().as_bytes(),
             )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn subscribe_mqtt(&self, topic: &str) -> Result<()> {
+        let topic = format!("{}/{}", self.topic_root, topic);
+        self.mqtt
+            .lock()
+            .await
+            .subscribe(&topic, QoS::AtMostOnce)
             .await?;
         Ok(())
     }

@@ -89,6 +89,8 @@ async fn start_device(modem: Modem) -> Result<()> {
         // TODO Add sleepWhenIdle
     })).await?;
 
+    device.subscribe_mqtt("commands/ping").await?;
+
     loop {
         device
             .publish_mqtt("telemetry", json!({
