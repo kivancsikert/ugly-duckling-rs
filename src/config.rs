@@ -2,8 +2,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug)]
 pub struct DeviceConfig {
-    instance: String,
-    id: String,
+    pub instance: String,
+    pub id: String,
 }
 
 pub fn load_device_config() -> Result<DeviceConfig> {

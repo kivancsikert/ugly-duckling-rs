@@ -1,5 +1,8 @@
 use std::time::Duration;
 
+use embedded_svc::ipv4::ClientConfiguration::DHCP;
+use embedded_svc::ipv4::Configuration::Client;
+use embedded_svc::ipv4::DHCPClientSettings;
 use embedded_svc::wifi::{AuthMethod, ClientConfiguration, Configuration};
 
 use esp_idf_hal::modem::Modem;
@@ -7,18 +10,36 @@ use esp_idf_svc::mdns::{EspMdns, Interface, Protocol, QueryResult};
 use esp_idf_svc::mqtt::client::{
     EspAsyncMqttClient, EspAsyncMqttConnection, MqttClientConfiguration,
 };
+use esp_idf_svc::netif::{EspNetif, NetifConfiguration, NetifStack};
 use esp_idf_svc::timer::EspTaskTimerService;
-use esp_idf_svc::wifi::{AsyncWifi, EspWifi};
+use esp_idf_svc::wifi::{AsyncWifi, EspWifi, WifiDriver};
 use esp_idf_svc::wifi::{WpsConfig, WpsFactoryInfo, WpsStatus, WpsType};
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 
 pub async fn connect_wifi(
+    device_name: &str,
     modem: Modem,
     sys_loop: &EspSystemEventLoop,
     timer_service: &EspTaskTimerService,
     nvs: &EspDefaultNvsPartition,
 ) -> anyhow::Result<EspWifi<'static>> {
-    let mut esp_wifi = EspWifi::new(modem, sys_loop.clone(), Some(nvs.clone()))?;
+    let mut host_name: heapless::String<30> = heapless::String::new();
+    host_name.push_str(device_name).expect("Hostname too long");
+    let ipv4_client_cfg =
+        DHCP(DHCPClientSettings {
+            hostname: Some(host_name),
+            ..Default::default()
+        });
+    let new_c = NetifConfiguration {
+        ip_configuration: Client(ipv4_client_cfg),
+        ..NetifConfiguration::wifi_default_client()
+    };
+
+    let mut esp_wifi = EspWifi::wrap_all(
+        WifiDriver::new(modem, sys_loop.clone(), Some(nvs.clone()))?,
+        EspNetif::new_with_conf(&new_c)?,
+        EspNetif::new(NetifStack::Ap)?,
+    )?;
     let mut wifi = AsyncWifi::wrap(&mut esp_wifi, sys_loop.clone(), timer_service.clone())?;
 
     wifi.start().await?;
@@ -32,8 +53,7 @@ pub async fn connect_wifi(
                 model_name: "Ugly Duckling",
                 // TODO Set up the correct model number
                 model_number: "MK6",
-                // TODO Set up the correct device name
-                device_name: "test-mk6-rs-1",
+                device_name: device_name,
             },
         };
 

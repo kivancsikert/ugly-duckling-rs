@@ -1,5 +1,5 @@
-mod network;
 mod config;
+mod network;
 
 use anyhow::Result;
 use embassy_futures::join::join_array;
@@ -70,9 +70,16 @@ async fn start_device(modem: Modem) -> Result<()> {
     let timer_service = EspTaskTimerService::new()?;
     let nvs = EspDefaultNvsPartition::take()?;
 
-    config::load_device_config().unwrap();
+    let device_config = config::load_device_config()?;
 
-    let wifi = network::connect_wifi(modem, &sys_loop, &timer_service, &nvs).await?;
+    let wifi = network::connect_wifi(
+        &device_config.instance,
+        modem,
+        &sys_loop,
+        &timer_service,
+        &nvs,
+    )
+    .await?;
     let ip_info = wifi.sta_netif().get_ip_info()?;
     log::info!("WiFi DHCP info: {:?}", ip_info);
 
