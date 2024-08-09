@@ -25,12 +25,17 @@ use std::ffi::c_void;
 const MAX_FREQ_MHZ: i32 = 160;
 const MIN_FREQ_MHZ: i32 = 40;
 
-const MQTT_QUEUE_SIZE: usize = 16;
-
 struct MqttMessage {
     topic: String,
     payload: Value,
 }
+
+const MQTT_QUEUE_SIZE: usize = 16;
+
+type MqttPublishChannel = Channel<CriticalSectionRawMutex, MqttMessage, MQTT_QUEUE_SIZE>;
+type MqttPublisher = Sender<'static, CriticalSectionRawMutex, MqttMessage, MQTT_QUEUE_SIZE>;
+type MqttPublishReceiver = Receiver<'static, CriticalSectionRawMutex, MqttMessage, MQTT_QUEUE_SIZE>;
+static MQTT_PUBLISH_QUEUE: StaticCell<MqttPublishChannel> = StaticCell::new();
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct DeviceConfig {
@@ -44,11 +49,8 @@ pub struct Device {
     pub config: DeviceConfig,
     _wifi: EspWifi<'static>,
     _sntp: EspSntp<'static>,
-    mqtt_queue: Sender<'static, CriticalSectionRawMutex, MqttMessage, MQTT_QUEUE_SIZE>,
+    mqtt_queue: MqttPublisher,
 }
-
-static MQTT_QUEUE: StaticCell<Channel<CriticalSectionRawMutex, MqttMessage, MQTT_QUEUE_SIZE>> =
-    StaticCell::new();
 
 impl Device {
     pub async fn init(modem: Modem) -> Result<Self> {
@@ -86,12 +88,12 @@ impl Device {
         });
         log::info!("MDNS query result: {:?}", mqtt);
 
-        let mqtt_publisher = MQTT_QUEUE.init(Channel::new());
+        let mqtt_publisher = MQTT_PUBLISH_QUEUE.init(MqttPublishChannel::new());
         let topic_root = format!("devices/ugly-duckling/{}", config.instance);
 
         Spawner::for_current_executor()
             .await
-            .spawn(mqtt_queue(
+            .spawn(mqtt_publish_queue(
                 mqtt,
                 config.instance.clone(),
                 topic_root,
@@ -153,11 +155,11 @@ async fn init_rtc(mdns: &EspMdns) -> Result<EspSntp<'static>> {
 }
 
 #[embassy_executor::task]
-async fn mqtt_queue(
+async fn mqtt_publish_queue(
     mqtt: Service,
     client_id: String,
     topic_root: String,
-    queue: Receiver<'static, CriticalSectionRawMutex, MqttMessage, MQTT_QUEUE_SIZE>,
+    queue: MqttPublishReceiver,
 ) {
     let (mut mqtt, _) = network::connect_mqtt(
         &format!("mqtt://{}:{}", mqtt.hostname, mqtt.port),
