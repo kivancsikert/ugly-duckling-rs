@@ -25,11 +25,9 @@ pub async fn connect_wifi(
 ) -> anyhow::Result<EspWifi<'static>> {
     let mut host_name: heapless::String<30> = heapless::String::new();
     host_name.push_str(device_name).expect("Hostname too long");
-    let ipv4_client_cfg =
-        DHCP(DHCPClientSettings {
-            hostname: Some(host_name),
-            ..Default::default()
-        });
+    let ipv4_client_cfg = DHCP(DHCPClientSettings {
+        hostname: Some(host_name),
+    });
     let new_c = NetifConfiguration {
         ip_configuration: Client(ipv4_client_cfg),
         ..NetifConfiguration::wifi_default_client()
@@ -53,7 +51,7 @@ pub async fn connect_wifi(
                 model_name: "Ugly Duckling",
                 // TODO Set up the correct model number
                 model_number: "MK6",
-                device_name: device_name,
+                device_name,
             },
         };
 
