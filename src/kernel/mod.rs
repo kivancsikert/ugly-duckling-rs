@@ -10,6 +10,7 @@ use embassy_sync::channel::Sender;
 use embassy_sync::signal::Signal;
 use esp_idf_hal::modem::Modem;
 use esp_idf_svc::mdns::EspMdns;
+use esp_idf_svc::mqtt::client::EspAsyncMqttClient;
 use esp_idf_svc::sntp::{self, EspSntp};
 use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::wifi::EspWifi;
@@ -33,7 +34,6 @@ struct MqttMessage {
 }
 
 const MQTT_QUEUE_SIZE: usize = 16;
-
 type MqttPublishChannel = Channel<CriticalSectionRawMutex, MqttMessage, MQTT_QUEUE_SIZE>;
 type MqttPublisher = Sender<'static, CriticalSectionRawMutex, MqttMessage, MQTT_QUEUE_SIZE>;
 type MqttPublishReceiver = Receiver<'static, CriticalSectionRawMutex, MqttMessage, MQTT_QUEUE_SIZE>;
@@ -146,6 +146,12 @@ async fn init_mqtt(mdns: &EspMdns, instance: &str) -> Result<MqttPublisher> {
     });
     log::info!("MDNS query result: {:?}", mqtt);
 
+    let (mqtt, _) =
+        network::connect_mqtt(&format!("mqtt://{}:{}", mqtt.hostname, mqtt.port), instance)
+            .expect("Couldn't connect to MQTT");
+    static MQTT: StaticCell<EspAsyncMqttClient> = StaticCell::new();
+    let mqtt = MQTT.init(mqtt);
+
     static MQTT_PUBLISH_QUEUE: StaticCell<MqttPublishChannel> = StaticCell::new();
     let publish_queue = MQTT_PUBLISH_QUEUE.init(MqttPublishChannel::new());
     let topic_root = format!("devices/ugly-duckling/{}", instance);
@@ -154,7 +160,6 @@ async fn init_mqtt(mdns: &EspMdns, instance: &str) -> Result<MqttPublisher> {
         .await
         .spawn(mqtt_publish_queue_task(
             mqtt,
-            instance.to_string(),
             topic_root,
             publish_queue.receiver(),
         ))
@@ -165,17 +170,10 @@ async fn init_mqtt(mdns: &EspMdns, instance: &str) -> Result<MqttPublisher> {
 
 #[embassy_executor::task]
 async fn mqtt_publish_queue_task(
-    mqtt: Service,
-    client_id: String,
+    mqtt: &'static mut EspAsyncMqttClient,
     topic_root: String,
     queue: MqttPublishReceiver,
 ) {
-    let (mut mqtt, _) = network::connect_mqtt(
-        &format!("mqtt://{}:{}", mqtt.hostname, mqtt.port),
-        &client_id,
-    )
-    .expect("Couldn't connect to MQTT");
-
     loop {
         let message = queue.receive().await;
         mqtt.publish(
