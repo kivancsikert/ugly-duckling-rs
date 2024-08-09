@@ -35,7 +35,6 @@ const MQTT_QUEUE_SIZE: usize = 16;
 type MqttPublishChannel = Channel<CriticalSectionRawMutex, MqttMessage, MQTT_QUEUE_SIZE>;
 type MqttPublisher = Sender<'static, CriticalSectionRawMutex, MqttMessage, MQTT_QUEUE_SIZE>;
 type MqttPublishReceiver = Receiver<'static, CriticalSectionRawMutex, MqttMessage, MQTT_QUEUE_SIZE>;
-static MQTT_PUBLISH_QUEUE: StaticCell<MqttPublishChannel> = StaticCell::new();
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct DeviceConfig {
@@ -88,6 +87,7 @@ impl Device {
         });
         log::info!("MDNS query result: {:?}", mqtt);
 
+        static MQTT_PUBLISH_QUEUE: StaticCell<MqttPublishChannel> = StaticCell::new();
         let mqtt_publisher = MQTT_PUBLISH_QUEUE.init(MqttPublishChannel::new());
         let topic_root = format!("devices/ugly-duckling/{}", config.instance);
 
