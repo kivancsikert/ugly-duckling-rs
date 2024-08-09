@@ -1,22 +1,16 @@
-mod config;
-mod network;
+mod kernel;
 
 use anyhow::Result;
 use embassy_futures::join::join_array;
 use embassy_futures::select::select;
 use embassy_futures::select::Either::First;
-use embassy_time::Timer;
+use embassy_time::{Duration, Timer};
 use esp_idf_hal::gpio::{AnyIOPin, AnyOutputPin, IOPin, PinDriver};
 use esp_idf_hal::modem::Modem;
 use esp_idf_hal::prelude::Peripherals;
 use esp_idf_hal::task::block_on;
-use esp_idf_svc::mdns::EspMdns;
-use esp_idf_svc::sntp;
-use esp_idf_svc::timer::EspTaskTimerService;
-use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
-use network::{query_mdns, Service};
 use serde_json::json;
-use std::future::{pending, Future};
+use std::future::Future;
 use std::pin::Pin;
 
 fn main() -> Result<()> {
@@ -67,65 +61,16 @@ async fn task<Fut: Future<Output = Result<()>>>(future: Fut) {
 }
 
 async fn start_device(modem: Modem) -> Result<()> {
-    let sys_loop = EspSystemEventLoop::take()?;
-    let timer_service = EspTaskTimerService::new()?;
-    let nvs = EspDefaultNvsPartition::take()?;
+    let device = kernel::Device::init(modem).await?;
+    log::info!("Device started");
 
-    let device_config = config::load_device_config()?;
-
-    let wifi = network::connect_wifi(
-        &device_config.instance,
-        modem,
-        &sys_loop,
-        &timer_service,
-        &nvs,
-    )
-    .await?;
-    let ip_info = wifi.sta_netif().get_ip_info()?;
-    log::info!("WiFi DHCP info: {:?}", ip_info);
-
-    // TODO Use some async mDNS instead to avoid blocking the executor
-    let mdns = EspMdns::take()?;
-
-    let ntp = query_mdns(&mdns, "_ntp", "_udp")?.unwrap_or_else(|| Service {
-        hostname: String::from("pool.ntp.org"),
-        port: 123,
-    });
-    log::info!(
-        "Time before SNTP sync: {:?}, synchronizing with {:?}",
-        std::time::SystemTime::now(),
-        ntp
-    );
-
-    let _sntp = sntp::EspSntp::new_with_callback(
-        &sntp::SntpConf {
-            servers: [ntp.hostname.as_str()],
-            ..Default::default()
-        },
-        |synced_time| {
-            log::info!("Time synced via SNTP: {:?}", synced_time);
-        },
-    )?;
-
-    let mqtt = query_mdns(&mdns, "_mqtt", "_tcp")?.unwrap_or_else(|| Service {
-        hostname: String::from("bumblebee.local"),
-        port: 1883,
-    });
-    log::info!("MDNS query result: {:?}", mqtt);
-
-    let (mut mqtt, _) = network::connect_mqtt(
-        &format!("mqtt://{}:{}", mqtt.hostname, mqtt.port),
-        &device_config.instance,
-    )?;
-
-    let topic_root = &format!("devices/ugly-duckling/{}", device_config.instance);
     let payload = json!({
         "type": "ugly-duckling",
         "model": "mk6",
-        "id": device_config.id,
-        "instance": device_config.instance,
+        "id": device.config.id,
+        "instance": device.config.instance,
         // TODO Add mac
-        "deviceConfig": serde_json::to_string(&device_config)?,
+        "deviceConfig": serde_json::to_string(&device.config)?,
         // TODO Do we need this?
         "app": "ugly-duckling-rs",
         // TODO Extract this to static variable
@@ -135,20 +80,18 @@ async fn start_device(modem: Modem) -> Result<()> {
         "time": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs(),
         // TODO Add sleepWhenIdle
     });
-    mqtt.publish(
-        &format!("{topic_root}/init"),
-        esp_idf_svc::mqtt::client::QoS::AtLeastOnce,
-        false,
-        payload.to_string().as_bytes(),
-    )
-    .await?;
+    device.publish_mqtt("init", &payload.to_string()).await?;
 
-    let uptime_us = unsafe { esp_idf_sys::esp_timer_get_time() };
-    log::info!("Device started in {} ms", uptime_us as f64 / 1000.0);
-
-    log::info!("Entering idle loop...");
-    pending::<()>().await;
-    Ok(())
+    loop {
+        let payload = json!({
+            "uptime": Duration::from_micros(unsafe { esp_idf_sys::esp_timer_get_time() as u64 }).as_millis(),
+            "memory": unsafe { esp_idf_sys::esp_get_free_heap_size() },
+        });
+        device
+            .publish_mqtt("telemetry", &payload.to_string())
+            .await?;
+        Timer::after_secs(5).await;
+    }
 }
 
 async fn reset_watcher(pin: AnyIOPin) -> Result<()> {
