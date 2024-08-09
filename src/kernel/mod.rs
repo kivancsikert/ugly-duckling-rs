@@ -8,10 +8,12 @@ use esp_idf_svc::sntp::{self, EspSntp};
 use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::wifi::EspWifi;
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
+use esp_idf_sys::{esp_pm_config_esp32_t, esp_pm_configure};
 use network::{query_mdns, Service};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cell::RefCell;
+use std::ffi::c_void;
 
 pub struct Device {
     pub config: DeviceConfig,
@@ -21,10 +23,16 @@ pub struct Device {
     mqtt: RefCell<EspAsyncMqttClient>,
 }
 
+// TODO Configure these per device model
+const MAX_FREQ_MHZ: i32 = 160;
+const MIN_FREQ_MHZ: i32 = 40;
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct DeviceConfig {
     pub instance: String,
     pub id: String,
+    #[serde(rename = "sleepWhenIdle", default)]
+    sleep_when_idle: bool,
 }
 
 impl Device {
@@ -34,6 +42,18 @@ impl Device {
         let nvs = EspDefaultNvsPartition::take()?;
 
         let config = load_device_config()?;
+
+        if config.sleep_when_idle {
+            log::info!("Device will sleep when idle");
+        } else {
+            log::info!("Device will not sleep when idle");
+        }
+        let pm_config = esp_pm_config_esp32_t {
+            max_freq_mhz: MAX_FREQ_MHZ,
+            min_freq_mhz: MIN_FREQ_MHZ,
+            light_sleep_enable: config.sleep_when_idle,
+        };
+        esp_idf_sys::esp!(unsafe { esp_pm_configure(&pm_config as *const _ as *mut c_void) })?;
 
         let wifi =
             network::connect_wifi(&config.instance, modem, &sys_loop, &timer_service, &nvs).await?;
@@ -89,7 +109,8 @@ impl Device {
     }
 
     pub async fn publish_mqtt(&self, topic: &str, payload: Value) -> Result<MessageId> {
-        self.publish_mqtt_internal(topic, &payload.to_string()).await
+        self.publish_mqtt_internal(topic, &payload.to_string())
+            .await
     }
 
     async fn publish_mqtt_internal(&self, topic: &str, payload: &str) -> Result<MessageId> {

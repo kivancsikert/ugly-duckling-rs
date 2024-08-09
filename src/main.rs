@@ -64,7 +64,7 @@ async fn start_device(modem: Modem) -> Result<()> {
     let device = kernel::Device::init(modem).await?;
     log::info!("Device started");
 
-    let payload = json!({
+    device.publish_mqtt("init", json!({
         "type": "ugly-duckling",
         "model": "mk6",
         "id": device.config.id,
@@ -79,16 +79,14 @@ async fn start_device(modem: Modem) -> Result<()> {
         // TODO Add bootCount
         "time": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs(),
         // TODO Add sleepWhenIdle
-    });
-    device.publish_mqtt("init", &payload.to_string()).await?;
+    })).await?;
 
     loop {
-        let payload = json!({
+        device
+            .publish_mqtt("telemetry", json!({
             "uptime": Duration::from_micros(unsafe { esp_idf_sys::esp_timer_get_time() as u64 }).as_millis(),
             "memory": unsafe { esp_idf_sys::esp_get_free_heap_size() },
-        });
-        device
-            .publish_mqtt("telemetry", &payload.to_string())
+        }))
             .await?;
         Timer::after_secs(5).await;
     }
