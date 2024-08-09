@@ -1,9 +1,13 @@
 mod network;
 
 use anyhow::Result;
+use embassy_executor::Spawner;
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::channel::Channel;
+use embassy_sync::channel::Receiver;
+use embassy_sync::channel::Sender;
 use esp_idf_hal::modem::Modem;
 use esp_idf_svc::mdns::EspMdns;
-use esp_idf_svc::mqtt::client::{EspAsyncMqttClient, MessageId};
 use esp_idf_svc::sntp::{self, EspSntp};
 use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::wifi::EspWifi;
@@ -12,20 +16,19 @@ use esp_idf_sys::{esp_pm_config_esp32_t, esp_pm_configure};
 use network::{query_mdns, Service};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::cell::RefCell;
+use static_cell::StaticCell;
 use std::ffi::c_void;
-
-pub struct Device {
-    pub config: DeviceConfig,
-    _wifi: EspWifi<'static>,
-    _sntp: EspSntp<'static>,
-    topic_root: String,
-    mqtt: RefCell<EspAsyncMqttClient>,
-}
 
 // TODO Configure these per device model
 const MAX_FREQ_MHZ: i32 = 160;
 const MIN_FREQ_MHZ: i32 = 40;
+
+const MQTT_QUEUE_SIZE: usize = 16;
+
+struct MqttMessage {
+    topic: String,
+    payload: Value,
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct DeviceConfig {
@@ -34,6 +37,16 @@ pub struct DeviceConfig {
     #[serde(rename = "sleepWhenIdle", default)]
     sleep_when_idle: bool,
 }
+
+pub struct Device {
+    pub config: DeviceConfig,
+    _wifi: EspWifi<'static>,
+    _sntp: EspSntp<'static>,
+    mqtt_queue: Sender<'static, NoopRawMutex, MqttMessage, MQTT_QUEUE_SIZE>,
+}
+
+static MQTT_QUEUE: StaticCell<Channel<NoopRawMutex, MqttMessage, MQTT_QUEUE_SIZE>> =
+    StaticCell::new();
 
 impl Device {
     pub async fn init(modem: Modem) -> Result<Self> {
@@ -89,12 +102,18 @@ impl Device {
         });
         log::info!("MDNS query result: {:?}", mqtt);
 
-        let (mqtt, _) = network::connect_mqtt(
-            &format!("mqtt://{}:{}", mqtt.hostname, mqtt.port),
-            &config.instance,
-        )?;
+        let mqtt_publisher = MQTT_QUEUE.init(Channel::new());
+        let topic_root = format!("devices/ugly-duckling/{}", config.instance);
 
-        let topic_root = &format!("devices/ugly-duckling/{}", config.instance);
+        Spawner::for_current_executor()
+            .await
+            .spawn(mqtt_queue(
+                mqtt,
+                config.instance.clone(),
+                topic_root,
+                mqtt_publisher.receiver(),
+            ))
+            .expect("Couldn't start MQTT queue");
 
         let uptime_us = unsafe { esp_idf_sys::esp_timer_get_time() };
         log::info!("Device started in {} ms", uptime_us as f64 / 1000.0);
@@ -103,28 +122,44 @@ impl Device {
             config,
             _wifi: wifi,
             _sntp: sntp,
-            topic_root: topic_root.clone(),
-            mqtt: RefCell::new(mqtt),
+            mqtt_queue: mqtt_publisher.sender(),
         })
     }
 
-    pub async fn publish_mqtt(&self, topic: &str, payload: Value) -> Result<MessageId> {
-        self.publish_mqtt_internal(topic, &payload.to_string())
-            .await
+    pub async fn publish_mqtt(&self, topic: &str, payload: Value) -> Result<()> {
+        self.mqtt_queue
+            .send(MqttMessage {
+                topic: topic.to_string(),
+                payload,
+            })
+            .await;
+        Ok(())
     }
+}
 
-    async fn publish_mqtt_internal(&self, topic: &str, payload: &str) -> Result<MessageId> {
-        let result = self
-            .mqtt
-            .borrow_mut()
-            .publish(
-                &format!("{}/{}", self.topic_root, topic),
-                esp_idf_svc::mqtt::client::QoS::AtLeastOnce,
-                false,
-                payload.to_string().as_bytes(),
-            )
-            .await?;
-        Ok(result)
+#[embassy_executor::task]
+async fn mqtt_queue(
+    mqtt: Service,
+    client_id: String,
+    topic_root: String,
+    queue: Receiver<'static, NoopRawMutex, MqttMessage, MQTT_QUEUE_SIZE>,
+) {
+    let (mut mqtt, _) = network::connect_mqtt(
+        &format!("mqtt://{}:{}", mqtt.hostname, mqtt.port),
+        &client_id,
+    )
+    .expect("Couldn't connect to MQTT");
+
+    loop {
+        let message = queue.receive().await;
+        mqtt.publish(
+            &format!("{}/{}", &topic_root, &message.topic),
+            esp_idf_svc::mqtt::client::QoS::AtLeastOnce,
+            false,
+            message.payload.to_string().as_bytes(),
+        )
+        .await
+        .expect("Failed to publish message");
     }
 }
 

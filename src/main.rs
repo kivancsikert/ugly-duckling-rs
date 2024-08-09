@@ -10,8 +10,8 @@ use esp_idf_hal::gpio::{AnyIOPin, AnyOutputPin, IOPin, PinDriver};
 use esp_idf_hal::modem::Modem;
 use esp_idf_hal::prelude::Peripherals;
 use serde_json::json;
-use std::future::Future;
 use static_cell::StaticCell;
+use std::future::Future;
 use std::pin::Pin;
 
 static EXECUTOR: StaticCell<Executor> = StaticCell::new();
