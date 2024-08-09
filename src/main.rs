@@ -15,6 +15,7 @@ use esp_idf_svc::sntp;
 use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 use network::{query_mdns, Service};
+use serde_json::json;
 use std::future::{pending, Future};
 use std::pin::Pin;
 
@@ -101,8 +102,8 @@ async fn start_device(modem: Modem) -> Result<()> {
             servers: [ntp.hostname.as_str()],
             ..Default::default()
         },
-        |duration| {
-            log::info!("Time synced via SNTP: {:?}", duration);
+        |synced_time| {
+            log::info!("Time synced via SNTP: {:?}", synced_time);
         },
     )?;
 
@@ -114,14 +115,31 @@ async fn start_device(modem: Modem) -> Result<()> {
 
     let (mut mqtt, _) = network::connect_mqtt(
         &format!("mqtt://{}:{}", mqtt.hostname, mqtt.port),
-        "ugly-duckling-rs-test",
+        &device_config.instance,
     )?;
-    let payload = "Hello via mDNS!".as_bytes();
+
+    let topic_root = &format!("devices/ugly-duckling/{}", device_config.instance);
+    let payload = json!({
+        "type": "ugly-duckling",
+        "model": "mk6",
+        "id": device_config.id,
+        "instance": device_config.instance,
+        // TODO Add mac
+        "deviceConfig": serde_json::to_string(&device_config)?,
+        // TODO Do we need this?
+        "app": "ugly-duckling-rs",
+        // TODO Extract this to static variable
+        "version": env!("GIT_VERSION"),
+        // TODO Add wakeup reason
+        // TODO Add bootCount
+        "time": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs(),
+        // TODO Add sleepWhenIdle
+    });
     mqtt.publish(
-        "test",
+        &format!("{topic_root}/init"),
         esp_idf_svc::mqtt::client::QoS::AtLeastOnce,
         false,
-        payload,
+        payload.to_string().as_bytes(),
     )
     .await?;
 
