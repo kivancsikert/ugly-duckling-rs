@@ -72,8 +72,6 @@ async fn start_device(modem: Modem) -> Result<()> {
     let uptime_us = unsafe { esp_idf_sys::esp_timer_get_time() };
     log::info!("Device started in {} ms", uptime_us as f64 / 1000.0);
 
-    kernel.mqtt.subscribe("commands/ping").await?;
-
     kernel.mqtt.publish("init", json!({
         "type": "ugly-duckling",
         "model": "mk6",

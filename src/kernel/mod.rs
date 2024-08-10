@@ -1,3 +1,4 @@
+pub mod command;
 mod mdns;
 mod mqtt;
 mod rtc;
@@ -17,6 +18,8 @@ use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 use esp_idf_sys::{esp_pm_config_esp32_t, esp_pm_configure};
 use mqtt::Mqtt;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use static_cell::StaticCell;
 use std::ffi::c_void;
 use std::sync::Arc;
 
@@ -62,19 +65,37 @@ impl Device {
         let wifi =
             wifi::init_wifi(&config.instance, modem, &sys_loop, &timer_service, &nvs).await?;
 
+        // TODO Use something better than a static cell
+        static COMMAND_MANAGER: StaticCell<command::CommandManager> = StaticCell::new();
+        let command_manager = COMMAND_MANAGER.init(command::CommandManager::new());
+        command_manager.register("ping", |v: Value| {
+            log::info!("Ping received: {:?}", v);
+        });
+
         // TODO Use some async mDNS instead to avoid blocking the executor
         let mdns = EspMdns::take()?;
         let (sntp, mqtt) = join(
             rtc::init_rtc(&mdns),
-            mqtt::Mqtt::create(&mdns, &config.instance),
+            mqtt::Mqtt::create(
+                &mdns,
+                &config.instance,
+                Box::new(|path, payload| {
+                    if let Some(command) = path.strip_prefix("commands/") {
+                        command_manager.handle(command, payload);
+                    }
+                }),
+            ),
         )
         .await;
+        let mqtt = mqtt?;
+
+        mqtt.subscribe("commands/#").await?;
 
         Ok(Self {
             config,
             _wifi: wifi,
             _sntp: sntp?,
-            mqtt: mqtt?,
+            mqtt,
         })
     }
 }

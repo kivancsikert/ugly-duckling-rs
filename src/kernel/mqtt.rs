@@ -18,8 +18,14 @@ pub struct Mqtt {
     _conn: Arc<Mutex<CriticalSectionRawMutex, EspAsyncMqttConnection>>,
 }
 
+type IncomingMessageHandler = Box<dyn Fn(&str, &str)>;
+
 impl Mqtt {
-    pub async fn create(mdns: &EspMdns, instance: &str) -> Result<Mqtt> {
+    pub async fn create(
+        mdns: &EspMdns,
+        instance: &str,
+        handler: IncomingMessageHandler,
+    ) -> Result<Mqtt> {
         let mqtt = mdns::query_mdns(mdns, "_mqtt", "_tcp")?.unwrap_or_else(|| mdns::Service {
             hostname: String::from("bumblebee.local"),
             port: 1883,
@@ -50,7 +56,12 @@ impl Mqtt {
         let connected = Arc::new(Signal::<CriticalSectionRawMutex, ()>::new());
         Spawner::for_current_executor()
             .await
-            .spawn(handle_mqtt_events(conn.clone(), connected.clone()))
+            .spawn(handle_mqtt_events(
+                conn.clone(),
+                format!("{topic_root}/"),
+                handler,
+                connected.clone(),
+            ))
             .expect("Couldn't spawn MQTT handler");
         connected.wait().await;
 
@@ -91,6 +102,8 @@ impl Mqtt {
 #[embassy_executor::task]
 async fn handle_mqtt_events(
     conn: Arc<Mutex<CriticalSectionRawMutex, EspAsyncMqttConnection>>,
+    incoming_prefix: String,
+    handler: IncomingMessageHandler,
     connected: Arc<Signal<CriticalSectionRawMutex, ()>>,
 ) {
     loop {
@@ -110,6 +123,23 @@ async fn handle_mqtt_events(
                     std::str::from_utf8(data),
                     details
                 );
+                let data = std::str::from_utf8(data);
+                if let Ok(data) = data {
+                    if let Some(path) = topic {
+                        if let Some(path) = path.strip_prefix(&incoming_prefix) {
+                            log::info!("Received message for path: {:?}", path);
+                            (handler)(path, data);
+                            continue;
+                        }
+                    }
+                    log::info!("Received message on unknown topic: {:?}", topic);
+                } else {
+                    log::error!(
+                        "Failed to parse message: {:?} for topic {:?}",
+                        data.err(),
+                        topic
+                    );
+                }
             }
             EventPayload::Connected(session_present) => {
                 log::info!(
