@@ -70,7 +70,7 @@ impl Device {
             wifi::init_wifi(&config.instance, modem, &sys_loop, &timer_service, &nvs).await?;
 
         // TODO Use something better than a static cell
-        let command_manager = make_static!(command::CommandManager, command::CommandManager::new());
+        let command_manager = make_static!(command::CommandManager);
         command_manager.register("ping", |v: Value| {
             log::info!("Ping received: {:?}", v);
             Ok(Some(json!({"pong": v})))
