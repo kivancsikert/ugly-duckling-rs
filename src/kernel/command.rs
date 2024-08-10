@@ -1,27 +1,26 @@
-use serde::de::DeserializeOwned;
+use anyhow::{anyhow, Result};
+use serde::{de::DeserializeOwned, Serialize};
 use std::{collections::HashMap, sync::Arc};
 
 trait CommandHandler {
-    fn execute(&self, payload: &str);
+    fn execute(&self, payload: &str) -> Result<Option<String>>;
 }
 
-struct Command<T> {
-    delegate: Arc<dyn Fn(T) + Send + Sync>,
+struct Command<I, O> {
+    delegate: Arc<dyn Fn(I) -> Result<Option<O>> + Send + Sync>,
 }
 
-impl<T> CommandHandler for Command<T>
+impl<I, O> CommandHandler for Command<I, O>
 where
-    T: DeserializeOwned + 'static,
+    I: DeserializeOwned + 'static,
+    O: Serialize + 'static,
 {
-    fn execute(&self, payload: &str) {
-        match serde_json::from_str::<T>(payload) {
-            Ok(data) => {
-                (self.delegate)(data);
-            }
-            Err(e) => {
-                eprintln!("Failed to deserialize payload: {}", e);
-            }
-        }
+    fn execute(&self, payload: &str) -> Result<Option<String>> {
+        let data = serde_json::from_str(payload)?;
+        let result = (self.delegate)(data)?;
+        Ok(result
+            .map(|result| serde_json::to_string(&result))
+            .transpose()?)
     }
 }
 
@@ -36,10 +35,11 @@ impl CommandManager {
         }
     }
 
-    pub fn register<T, F>(&mut self, path: &str, command: F)
+    pub fn register<I, O, F>(&mut self, path: &str, command: F)
     where
-        T: DeserializeOwned + 'static,
-        F: Fn(T) + Send + Sync + 'static,
+        I: DeserializeOwned + 'static,
+        O: Serialize + 'static,
+        F: Fn(I) -> Result<Option<O>> + Send + Sync + 'static,
     {
         self.commands.insert(
             path.to_string(),
@@ -49,11 +49,12 @@ impl CommandManager {
         );
     }
 
-    pub fn handle(&self, command: &str, payload: &str) {
-        if let Some(command) = self.commands.get(command) {
-            command.execute(payload);
+    pub fn handle(&self, command_name: &str, payload: &str) -> Result<Option<String>> {
+        if let Some(command) = self.commands.get(command_name) {
+            let response = command.execute(payload)?;
+            Ok(response)
         } else {
-            eprintln!("Unregistered registered: {}", command);
+            Err(anyhow!("Unregistered registered: {}", command_name))
         }
     }
 }

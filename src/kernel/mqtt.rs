@@ -18,7 +18,8 @@ pub struct Mqtt {
     _conn: Arc<Mutex<CriticalSectionRawMutex, EspAsyncMqttConnection>>,
 }
 
-type IncomingMessageHandler = Box<dyn Fn(&str, &str)>;
+pub type IncomingMessageResponse = Option<(String, String)>;
+type IncomingMessageHandler = Box<dyn Fn(&str, &str) -> Result<IncomingMessageResponse>>;
 
 impl Mqtt {
     pub async fn create(
@@ -57,6 +58,7 @@ impl Mqtt {
         Spawner::for_current_executor()
             .await
             .spawn(handle_mqtt_events(
+                mqtt.clone(),
                 conn.clone(),
                 format!("{topic_root}/"),
                 handler,
@@ -101,8 +103,9 @@ impl Mqtt {
 
 #[embassy_executor::task]
 async fn handle_mqtt_events(
+    mqtt: Arc<Mutex<CriticalSectionRawMutex, EspAsyncMqttClient>>,
     conn: Arc<Mutex<CriticalSectionRawMutex, EspAsyncMqttConnection>>,
-    incoming_prefix: String,
+    prefix: String,
     handler: IncomingMessageHandler,
     connected: Arc<Signal<CriticalSectionRawMutex, ()>>,
 ) {
@@ -126,9 +129,30 @@ async fn handle_mqtt_events(
                 let data = std::str::from_utf8(data);
                 if let Ok(data) = data {
                     if let Some(path) = topic {
-                        if let Some(path) = path.strip_prefix(&incoming_prefix) {
+                        if let Some(path) = path.strip_prefix(&prefix) {
                             log::info!("Received message for path: {:?}", path);
-                            (handler)(path, data);
+                            let result = (handler)(path, data);
+                            match result {
+                                Ok(Some((response_path, response))) => {
+                                    let response_topic = format!("{}{}", prefix, response_path);
+                                    log::info!("Publishing response to: {:?}", response_topic);
+                                    let _ = mqtt
+                                        .lock()
+                                        .await
+                                        .publish(
+                                            &response_topic,
+                                            QoS::AtMostOnce,
+                                            false,
+                                            response.as_bytes(),
+                                        )
+                                        .await;
+                                }
+                                Ok(None) => {}
+                                Err(e) => {
+                                    log::error!("Error handling message: {:?}", e);
+                                    // TODO Publish error
+                                }
+                            }
                             continue;
                         }
                     }
