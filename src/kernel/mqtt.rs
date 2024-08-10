@@ -93,8 +93,8 @@ async fn handle_mqtt_events(
     conn: Arc<Mutex<CriticalSectionRawMutex, EspAsyncMqttConnection>>,
     connected: Arc<Signal<CriticalSectionRawMutex, ()>>,
 ) {
-    let mut conn = conn.lock().await;
     loop {
+        let mut conn = conn.lock().await;
         let event = conn.next().await.expect("Cannot receive message");
         match event.payload() {
             EventPayload::Received {
