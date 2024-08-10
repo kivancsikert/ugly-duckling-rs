@@ -11,6 +11,7 @@ use esp_idf_svc::mqtt::client::EspAsyncMqttConnection;
 use esp_idf_svc::mqtt::client::QoS;
 use esp_idf_svc::sntp::EspSntp;
 use esp_idf_svc::timer::EspTaskTimerService;
+use esp_idf_svc::wifi::AsyncWifi;
 use esp_idf_svc::wifi::EspWifi;
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 use esp_idf_sys::{esp_pm_config_esp32_t, esp_pm_configure};
@@ -33,7 +34,7 @@ pub struct DeviceConfig {
 
 pub struct Device {
     pub config: DeviceConfig,
-    _wifi: EspWifi<'static>,
+    _wifi: Arc<Mutex<CriticalSectionRawMutex, AsyncWifi<EspWifi<'static>>>>,
     _sntp: EspSntp<'static>,
     mqtt: Arc<Mutex<CriticalSectionRawMutex, EspAsyncMqttClient>>,
     _conn: Arc<Mutex<CriticalSectionRawMutex, EspAsyncMqttConnection>>,
@@ -61,9 +62,7 @@ impl Device {
         esp_idf_sys::esp!(unsafe { esp_pm_configure(&pm_config as *const _ as *mut c_void) })?;
 
         let wifi =
-            network::connect_wifi(&config.instance, modem, &sys_loop, &timer_service, &nvs).await?;
-        let ip_info = wifi.sta_netif().get_ip_info()?;
-        log::info!("WiFi DHCP info: {:?}", ip_info);
+            network::init_wifi(&config.instance, modem, &sys_loop, &timer_service, &nvs).await?;
 
         // TODO Use some async mDNS instead to avoid blocking the executor
         let mdns = EspMdns::take()?;

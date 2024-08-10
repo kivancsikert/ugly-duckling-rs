@@ -8,7 +8,7 @@ use embassy_sync::signal::Signal;
 use embedded_svc::ipv4::ClientConfiguration::DHCP;
 use embedded_svc::ipv4::Configuration::Client;
 use embedded_svc::ipv4::DHCPClientSettings;
-use embedded_svc::wifi::{AuthMethod, ClientConfiguration, Configuration};
+use embedded_svc::wifi::Configuration;
 use esp_idf_hal::modem::Modem;
 use esp_idf_svc::mdns::{EspMdns, Interface, Protocol, QueryResult};
 use esp_idf_svc::mqtt::client::EventPayload;
@@ -18,19 +18,21 @@ use esp_idf_svc::mqtt::client::{
 use esp_idf_svc::netif::{EspNetif, NetifConfiguration, NetifStack};
 use esp_idf_svc::sntp::{self, EspSntp};
 use esp_idf_svc::timer::EspTaskTimerService;
-use esp_idf_svc::wifi::{AsyncWifi, EspWifi, WifiDriver};
-use esp_idf_svc::wifi::{WpsConfig, WpsFactoryInfo, WpsStatus, WpsType};
+use esp_idf_svc::wifi::{
+    AsyncWifi, AuthMethod, ClientConfiguration, EspWifi, WifiDriver, WifiEvent, WpsConfig,
+    WpsFactoryInfo, WpsStatus, WpsType,
+};
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
-pub async fn connect_wifi(
+pub async fn init_wifi(
     device_name: &str,
     modem: Modem,
     sys_loop: &EspSystemEventLoop,
     timer_service: &EspTaskTimerService,
     nvs: &EspDefaultNvsPartition,
-) -> anyhow::Result<EspWifi<'static>> {
+) -> anyhow::Result<Arc<Mutex<CriticalSectionRawMutex, AsyncWifi<EspWifi<'static>>>>> {
     let mut host_name: heapless::String<30> = heapless::String::new();
     host_name.push_str(device_name).expect("Hostname too long");
     let ipv4_client_cfg = DHCP(DHCPClientSettings {
@@ -41,12 +43,20 @@ pub async fn connect_wifi(
         ..NetifConfiguration::wifi_default_client()
     };
 
-    let mut esp_wifi = EspWifi::wrap_all(
+    let esp_wifi = EspWifi::wrap_all(
         WifiDriver::new(modem, sys_loop.clone(), Some(nvs.clone()))?,
         EspNetif::new_with_conf(&new_c)?,
         EspNetif::new(NetifStack::Ap)?,
     )?;
-    let mut wifi = AsyncWifi::wrap(&mut esp_wifi, sys_loop.clone(), timer_service.clone())?;
+    let wifi = AsyncWifi::wrap(esp_wifi, sys_loop.clone(), timer_service.clone())?;
+
+    let wifi_arc = Arc::new(Mutex::new(wifi));
+    Spawner::for_current_executor()
+        .await
+        .spawn(wifi_event_task(sys_loop.clone(), wifi_arc.clone()))
+        .unwrap();
+
+    let mut wifi = wifi_arc.lock().await;
 
     wifi.start().await?;
     log::info!("Wifi started");
@@ -91,13 +101,47 @@ pub async fn connect_wifi(
         }
     }
 
+    log::info!("Connecting to WiFi");
     wifi.connect().await?;
     log::info!("Wifi connected");
 
     wifi.wait_netif_up().await?;
     log::info!("Wifi netif up");
 
-    Ok(esp_wifi)
+    let ip_info = wifi.wifi().sta_netif().get_ip_info()?;
+    log::info!("WiFi DHCP info: {:?}", ip_info);
+
+    Ok(wifi_arc.clone())
+}
+
+#[embassy_executor::task]
+async fn wifi_event_task(
+    sys_loop: EspSystemEventLoop,
+    wifi: Arc<Mutex<CriticalSectionRawMutex, AsyncWifi<EspWifi<'static>>>>,
+) {
+    let mut events = sys_loop
+        .subscribe_async::<WifiEvent>()
+        .expect("Couldn't subscribe to system events");
+
+    loop {
+        let event = events.recv().await.expect("Couldn't receive event");
+        log::info!("Received wifi event: {:?}", event);
+        match event {
+            WifiEvent::StaConnected => {
+                log::info!("STA connected");
+            }
+            WifiEvent::StaDisconnected => {
+                log::info!("STA disconnected, reconnecting");
+                wifi.lock()
+                    .await
+                    .connect()
+                    .await
+                    .expect("Couldn't start reconnection to WiFi");
+                log::info!("STA reconnecting...");
+            }
+            _ => {}
+        }
+    }
 }
 
 fn has_stored_client_configuration(wifi_config: Configuration) -> bool {
