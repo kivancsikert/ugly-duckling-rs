@@ -1,3 +1,4 @@
+mod mdns;
 mod network;
 
 use anyhow::Result;

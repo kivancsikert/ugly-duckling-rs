@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use crate::kernel::mdns;
 use anyhow::Result;
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -10,7 +11,7 @@ use embedded_svc::ipv4::Configuration::Client;
 use embedded_svc::ipv4::DHCPClientSettings;
 use embedded_svc::wifi::Configuration;
 use esp_idf_hal::modem::Modem;
-use esp_idf_svc::mdns::{EspMdns, Interface, Protocol, QueryResult};
+use esp_idf_svc::mdns::EspMdns;
 use esp_idf_svc::mqtt::client::EventPayload;
 use esp_idf_svc::mqtt::client::{
     EspAsyncMqttClient, EspAsyncMqttConnection, MqttClientConfiguration,
@@ -172,33 +173,8 @@ fn has_stored_client_configuration(wifi_config: Configuration) -> bool {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Service {
-    pub hostname: String,
-    pub port: u16,
-}
-
-pub fn query_mdns(mdns: &EspMdns, service: &str, proto: &str) -> anyhow::Result<Option<Service>> {
-    let mut results = [QueryResult {
-        instance_name: None,
-        hostname: None,
-        port: 0,
-        txt: Vec::new(),
-        addr: Vec::new(),
-        interface: Interface::STA,
-        ip_protocol: Protocol::V4,
-    }];
-    mdns.query_ptr(service, proto, Duration::from_secs(5), 1, &mut results)?;
-    log::info!("MDNS query result: {:?}", results);
-    let result = results[0].clone();
-    Ok(result.hostname.map(|hostname| Service {
-        hostname: format!("{}.local", hostname),
-        port: result.port,
-    }))
-}
-
 pub async fn init_rtc(mdns: &EspMdns) -> Result<EspSntp<'static>> {
-    let ntp = query_mdns(mdns, "_ntp", "_udp")?.unwrap_or_else(|| Service {
+    let ntp = mdns::query_mdns(mdns, "_ntp", "_udp")?.unwrap_or_else(|| mdns::Service {
         hostname: String::from("pool.ntp.org"),
         port: 123,
     });
@@ -242,7 +218,7 @@ pub async fn init_mqtt(
     Arc<Mutex<CriticalSectionRawMutex, EspAsyncMqttConnection>>,
     String,
 )> {
-    let mqtt = query_mdns(mdns, "_mqtt", "_tcp")?.unwrap_or_else(|| Service {
+    let mqtt = mdns::query_mdns(mdns, "_mqtt", "_tcp")?.unwrap_or_else(|| mdns::Service {
         hostname: String::from("bumblebee.local"),
         port: 1883,
     });
