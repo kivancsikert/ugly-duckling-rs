@@ -1,5 +1,6 @@
 mod mdns;
 mod network;
+mod wifi;
 
 use anyhow::Result;
 use embassy_futures::join::join;
@@ -63,7 +64,7 @@ impl Device {
         esp_idf_sys::esp!(unsafe { esp_pm_configure(&pm_config as *const _ as *mut c_void) })?;
 
         let wifi =
-            network::init_wifi(&config.instance, modem, &sys_loop, &timer_service, &nvs).await?;
+            wifi::init_wifi(&config.instance, modem, &sys_loop, &timer_service, &nvs).await?;
 
         // TODO Use some async mDNS instead to avoid blocking the executor
         let mdns = EspMdns::take()?;
