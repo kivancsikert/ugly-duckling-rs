@@ -22,9 +22,10 @@ use mqtt::Mqtt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_json::Value;
-use static_cell::StaticCell;
 use std::ffi::c_void;
 use std::sync::Arc;
+
+use crate::make_static;
 
 // TODO Configure these per device model
 const MAX_FREQ_MHZ: i32 = 160;
@@ -69,8 +70,7 @@ impl Device {
             wifi::init_wifi(&config.instance, modem, &sys_loop, &timer_service, &nvs).await?;
 
         // TODO Use something better than a static cell
-        static COMMAND_MANAGER: StaticCell<command::CommandManager> = StaticCell::new();
-        let command_manager = COMMAND_MANAGER.init(command::CommandManager::new());
+        let command_manager = make_static!(command::CommandManager, command::CommandManager::new());
         command_manager.register("ping", |v: Value| {
             log::info!("Ping received: {:?}", v);
             Ok(Some(json!({"pong": v})))

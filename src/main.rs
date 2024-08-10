@@ -1,4 +1,5 @@
 mod kernel;
+mod macros;
 
 use anyhow::Result;
 use embassy_executor::Executor;
@@ -10,7 +11,6 @@ use esp_idf_hal::gpio::{AnyIOPin, AnyOutputPin, IOPin, PinDriver};
 use esp_idf_hal::modem::Modem;
 use esp_idf_hal::prelude::Peripherals;
 use serde_json::json;
-use static_cell::StaticCell;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -32,8 +32,7 @@ fn main() -> Result<()> {
         env!("GIT_VERSION")
     );
 
-    static EXECUTOR: StaticCell<Executor> = StaticCell::new();
-    let executor = EXECUTOR.init(Executor::new());
+    let executor = make_static!(Executor, Executor::new());
     executor.run(|spawner| {
         spawner
             .spawn(run_tasks())
