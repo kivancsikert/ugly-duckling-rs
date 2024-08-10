@@ -5,51 +5,87 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use esp_idf_svc::mdns::EspMdns;
-use esp_idf_svc::mqtt::client::EventPayload;
 use esp_idf_svc::mqtt::client::{
     EspAsyncMqttClient, EspAsyncMqttConnection, MqttClientConfiguration,
 };
+use esp_idf_svc::mqtt::client::{EventPayload, MessageId, QoS};
+use serde_json::Value;
 use std::sync::Arc;
 
-pub async fn init_mqtt(
-    mdns: &EspMdns,
-    instance: &str,
-) -> Result<(
-    EspAsyncMqttClient,
-    Arc<Mutex<CriticalSectionRawMutex, EspAsyncMqttConnection>>,
-    String,
-)> {
-    let mqtt = mdns::query_mdns(mdns, "_mqtt", "_tcp")?.unwrap_or_else(|| mdns::Service {
-        hostname: String::from("bumblebee.local"),
-        port: 1883,
-    });
-    log::info!("MDNS query result: {:?}", mqtt);
+pub struct Mqtt {
+    topic_root: String,
+    mqtt: Arc<Mutex<CriticalSectionRawMutex, EspAsyncMqttClient>>,
+    _conn: Arc<Mutex<CriticalSectionRawMutex, EspAsyncMqttConnection>>,
+}
 
-    let url: &str = &format!("mqtt://{}:{}", mqtt.hostname, mqtt.port);
-    let (mqtt, conn) = EspAsyncMqttClient::new(
-        url,
-        &MqttClientConfiguration {
-            client_id: Some(instance),
-            ..Default::default()
-        },
-    )
-    .expect("Couldn't connect to MQTT");
+impl Mqtt {
+    pub async fn create(mdns: &EspMdns, instance: &str) -> Result<Mqtt> {
+        let mqtt = mdns::query_mdns(mdns, "_mqtt", "_tcp")?.unwrap_or_else(|| mdns::Service {
+            hostname: String::from("bumblebee.local"),
+            port: 1883,
+        });
+        log::info!("MDNS query result: {:?}", mqtt);
 
-    let topic_root = format!("devices/ugly-duckling/{}", instance);
+        let url: &str = &format!("mqtt://{}:{}", mqtt.hostname, mqtt.port);
+        let (mqtt, conn) = EspAsyncMqttClient::new(
+            url,
+            &MqttClientConfiguration {
+                client_id: Some(instance),
+                ..Default::default()
+            },
+        )
+        .expect("Couldn't connect to MQTT");
 
-    // TODO Figure out how to avoid this warning
-    #[allow(clippy::arc_with_non_send_sync)]
-    let conn = Arc::new(Mutex::new(conn));
+        let topic_root = format!("devices/ugly-duckling/{}", instance);
 
-    // TODO Need something more robust than this, but for the time being it will do
-    let connected = Arc::new(Signal::<CriticalSectionRawMutex, ()>::new());
-    Spawner::for_current_executor()
-        .await
-        .spawn(handle_mqtt_events(conn.clone(), connected.clone()))
-        .expect("Couldn't spawn MQTT handler");
-    connected.wait().await;
+        // TODO Figure out how to avoid this warning
+        #[allow(clippy::arc_with_non_send_sync)]
+        let mqtt = Arc::new(Mutex::new(mqtt));
 
-    Ok((mqtt, conn, topic_root))
+        // TODO Figure out how to avoid this warning
+        #[allow(clippy::arc_with_non_send_sync)]
+        let conn = Arc::new(Mutex::new(conn));
+
+        // TODO Need more robust reconnection logic, but for the time being it will do
+        let connected = Arc::new(Signal::<CriticalSectionRawMutex, ()>::new());
+        Spawner::for_current_executor()
+            .await
+            .spawn(handle_mqtt_events(conn.clone(), connected.clone()))
+            .expect("Couldn't spawn MQTT handler");
+        connected.wait().await;
+
+        Ok(Self {
+            topic_root,
+            mqtt,
+            // TODO Do we need this?
+            _conn: conn,
+        })
+    }
+
+    pub async fn publish(&self, topic: &str, payload: Value) -> Result<MessageId> {
+        let topic = format!("{}/{}", self.topic_root, topic);
+        self.mqtt
+            .lock()
+            .await
+            .publish(
+                &topic,
+                QoS::AtMostOnce,
+                false,
+                payload.to_string().as_bytes(),
+            )
+            .await
+            .map_err(anyhow::Error::from)
+    }
+
+    pub async fn subscribe(&self, topic: &str) -> Result<MessageId> {
+        let topic = format!("{}/{}", self.topic_root, topic);
+        self.mqtt
+            .lock()
+            .await
+            .subscribe(&topic, QoS::AtMostOnce)
+            .await
+            .map_err(anyhow::Error::from)
+    }
 }
 
 #[embassy_executor::task]

@@ -9,17 +9,14 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
 use esp_idf_hal::modem::Modem;
 use esp_idf_svc::mdns::EspMdns;
-use esp_idf_svc::mqtt::client::EspAsyncMqttClient;
-use esp_idf_svc::mqtt::client::EspAsyncMqttConnection;
-use esp_idf_svc::mqtt::client::QoS;
 use esp_idf_svc::sntp::EspSntp;
 use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::wifi::AsyncWifi;
 use esp_idf_svc::wifi::EspWifi;
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 use esp_idf_sys::{esp_pm_config_esp32_t, esp_pm_configure};
+use mqtt::Mqtt;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::ffi::c_void;
 use std::sync::Arc;
 
@@ -39,9 +36,7 @@ pub struct Device {
     pub config: DeviceConfig,
     _wifi: Arc<Mutex<CriticalSectionRawMutex, AsyncWifi<EspWifi<'static>>>>,
     _sntp: EspSntp<'static>,
-    mqtt: Arc<Mutex<CriticalSectionRawMutex, EspAsyncMqttClient>>,
-    _conn: Arc<Mutex<CriticalSectionRawMutex, EspAsyncMqttConnection>>,
-    topic_root: String,
+    pub mqtt: Mqtt,
 }
 
 impl Device {
@@ -69,51 +64,18 @@ impl Device {
 
         // TODO Use some async mDNS instead to avoid blocking the executor
         let mdns = EspMdns::take()?;
-        let (sntp, mqtts) = join(
+        let (sntp, mqtt) = join(
             rtc::init_rtc(&mdns),
-            mqtt::init_mqtt(&mdns, &config.instance),
+            mqtt::Mqtt::create(&mdns, &config.instance),
         )
         .await;
-        let (mqtt, conn, topic_root) = mqtts?;
-
-        // TODO Figure out how to avoid this warning
-        #[allow(clippy::arc_with_non_send_sync)]
-        let mqtt = Arc::new(Mutex::new(mqtt));
 
         Ok(Self {
             config,
             _wifi: wifi,
             _sntp: sntp?,
-            mqtt,
-            // TODO Do we need to keep this alive?
-            _conn: conn,
-            topic_root,
+            mqtt: mqtt?,
         })
-    }
-
-    pub async fn publish_mqtt(&self, topic: &str, payload: Value) -> Result<()> {
-        let topic = format!("{}/{}", self.topic_root, topic);
-        self.mqtt
-            .lock()
-            .await
-            .publish(
-                &topic,
-                QoS::AtMostOnce,
-                false,
-                payload.to_string().as_bytes(),
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub async fn subscribe_mqtt(&self, topic: &str) -> Result<()> {
-        let topic = format!("{}/{}", self.topic_root, topic);
-        self.mqtt
-            .lock()
-            .await
-            .subscribe(&topic, QoS::AtMostOnce)
-            .await?;
-        Ok(())
     }
 }
 

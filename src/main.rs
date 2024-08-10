@@ -67,20 +67,20 @@ async fn task<Fut: Future<Output = Result<()>>>(future: Fut) {
 }
 
 async fn start_device(modem: Modem) -> Result<()> {
-    let device = kernel::Device::init(modem).await?;
+    let kernel = kernel::Device::init(modem).await?;
 
     let uptime_us = unsafe { esp_idf_sys::esp_timer_get_time() };
     log::info!("Device started in {} ms", uptime_us as f64 / 1000.0);
 
-    device.subscribe_mqtt("commands/ping").await?;
+    kernel.mqtt.subscribe("commands/ping").await?;
 
-    device.publish_mqtt("init", json!({
+    kernel.mqtt.publish("init", json!({
         "type": "ugly-duckling",
         "model": "mk6",
-        "id": device.config.id,
-        "instance": device.config.instance,
+        "id": kernel.config.id,
+        "instance": kernel.config.instance,
         // TODO Add mac
-        "deviceConfig": serde_json::to_string(&device.config)?,
+        "deviceConfig": serde_json::to_string(&kernel.config)?,
         // TODO Do we need this?
         "app": "ugly-duckling-rs",
         // TODO Extract this to static variable
@@ -92,8 +92,8 @@ async fn start_device(modem: Modem) -> Result<()> {
     })).await?;
 
     loop {
-        device
-            .publish_mqtt("telemetry", json!({
+        kernel.mqtt
+            .publish("telemetry", json!({
             "uptime": Duration::from_micros(unsafe { esp_idf_sys::esp_timer_get_time() as u64 }).as_millis(),
             "memory": unsafe { esp_idf_sys::esp_get_free_heap_size() },
         }))
