@@ -14,8 +14,6 @@ use static_cell::StaticCell;
 use std::future::Future;
 use std::pin::Pin;
 
-static EXECUTOR: StaticCell<Executor> = StaticCell::new();
-
 fn main() -> Result<()> {
     // It is necessary to call this function once. Otherwise some patches to the runtime
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
@@ -34,9 +32,12 @@ fn main() -> Result<()> {
         env!("GIT_VERSION")
     );
 
+    static EXECUTOR: StaticCell<Executor> = StaticCell::new();
     let executor = EXECUTOR.init(Executor::new());
     executor.run(|spawner| {
-        spawner.spawn(run_tasks()).unwrap();
+        spawner
+            .spawn(run_tasks())
+            .expect("Could not spawn run_tasks");
     });
 }
 
