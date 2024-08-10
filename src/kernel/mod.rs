@@ -1,5 +1,6 @@
 mod mdns;
 mod network;
+mod rtc;
 mod wifi;
 
 use anyhow::Result;
@@ -69,7 +70,7 @@ impl Device {
         // TODO Use some async mDNS instead to avoid blocking the executor
         let mdns = EspMdns::take()?;
         let (sntp, mqtts) = join(
-            network::init_rtc(&mdns),
+            rtc::init_rtc(&mdns),
             network::init_mqtt(&mdns, &config.instance),
         )
         .await;
