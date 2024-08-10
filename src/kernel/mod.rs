@@ -4,6 +4,7 @@ mod mqtt;
 mod rtc;
 mod wifi;
 
+use anyhow::anyhow;
 use anyhow::Result;
 use embassy_futures::join::join;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -16,12 +17,15 @@ use esp_idf_svc::wifi::AsyncWifi;
 use esp_idf_svc::wifi::EspWifi;
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 use esp_idf_sys::{esp_pm_config_esp32_t, esp_pm_configure};
+use mqtt::IncomingMessageResponse;
 use mqtt::Mqtt;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use serde_json::Value;
-use static_cell::StaticCell;
 use std::ffi::c_void;
 use std::sync::Arc;
+
+use crate::make_static;
 
 // TODO Configure these per device model
 const MAX_FREQ_MHZ: i32 = 160;
@@ -66,10 +70,10 @@ impl Device {
             wifi::init_wifi(&config.instance, modem, &sys_loop, &timer_service, &nvs).await?;
 
         // TODO Use something better than a static cell
-        static COMMAND_MANAGER: StaticCell<command::CommandManager> = StaticCell::new();
-        let command_manager = COMMAND_MANAGER.init(command::CommandManager::new());
+        let command_manager = make_static!(command::CommandManager);
         command_manager.register("ping", |v: Value| {
             log::info!("Ping received: {:?}", v);
+            Ok(Some(json!({"pong": v})))
         });
 
         // TODO Use some async mDNS instead to avoid blocking the executor
@@ -79,9 +83,23 @@ impl Device {
             mqtt::Mqtt::create(
                 &mdns,
                 &config.instance,
-                Box::new(|path, payload| {
+                Box::new(|path, payload| -> Result<IncomingMessageResponse> {
                     if let Some(command) = path.strip_prefix("commands/") {
-                        command_manager.handle(command, payload);
+                        let result = command_manager.handle(command, payload);
+                        match result {
+                            Ok(Some(response)) => {
+                                log::info!("Command response: {}", response);
+                                Ok(Some((format!("responses/{command}"), response)))
+                            }
+                            Ok(None) => {
+                                log::info!("Command response: None");
+                                Ok(None)
+                            }
+                            Err(e) => Err(anyhow!("Command error: {}", e)),
+                        }
+                    } else {
+                        log::info!("Not a command: {}", path);
+                        Ok(None)
                     }
                 }),
             ),

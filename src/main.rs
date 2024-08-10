@@ -1,4 +1,5 @@
 mod kernel;
+mod macros;
 
 use anyhow::Result;
 use embassy_executor::Executor;
@@ -10,11 +11,8 @@ use esp_idf_hal::gpio::{AnyIOPin, AnyOutputPin, IOPin, PinDriver};
 use esp_idf_hal::modem::Modem;
 use esp_idf_hal::prelude::Peripherals;
 use serde_json::json;
-use static_cell::StaticCell;
 use std::future::Future;
 use std::pin::Pin;
-
-static EXECUTOR: StaticCell<Executor> = StaticCell::new();
 
 fn main() -> Result<()> {
     // It is necessary to call this function once. Otherwise some patches to the runtime
@@ -34,9 +32,11 @@ fn main() -> Result<()> {
         env!("GIT_VERSION")
     );
 
-    let executor = EXECUTOR.init(Executor::new());
+    let executor = make_static!(Executor);
     executor.run(|spawner| {
-        spawner.spawn(run_tasks()).unwrap();
+        spawner
+            .spawn(run_tasks())
+            .expect("Could not spawn run_tasks");
     });
 }
 
@@ -72,7 +72,7 @@ async fn start_device(modem: Modem) -> Result<()> {
     let uptime_us = unsafe { esp_idf_sys::esp_timer_get_time() };
     log::info!("Device started in {} ms", uptime_us as f64 / 1000.0);
 
-    kernel.mqtt.publish("init", json!({
+    kernel.mqtt.publish("init", &json!({
         "type": "ugly-duckling",
         "model": "mk6",
         "id": kernel.config.id,
@@ -91,7 +91,7 @@ async fn start_device(modem: Modem) -> Result<()> {
 
     loop {
         kernel.mqtt
-            .publish("telemetry", json!({
+            .publish("telemetry", &json!({
             "uptime": Duration::from_micros(unsafe { esp_idf_sys::esp_timer_get_time() as u64 }).as_millis(),
             "memory": unsafe { esp_idf_sys::esp_get_free_heap_size() },
         }))
