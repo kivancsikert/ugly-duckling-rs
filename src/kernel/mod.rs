@@ -1,5 +1,5 @@
 mod mdns;
-mod network;
+mod mqtt;
 mod rtc;
 mod wifi;
 
@@ -71,7 +71,7 @@ impl Device {
         let mdns = EspMdns::take()?;
         let (sntp, mqtts) = join(
             rtc::init_rtc(&mdns),
-            network::init_mqtt(&mdns, &config.instance),
+            mqtt::init_mqtt(&mdns, &config.instance),
         )
         .await;
         let (mqtt, conn, topic_root) = mqtts?;
