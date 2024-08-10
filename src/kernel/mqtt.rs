@@ -76,8 +76,10 @@ impl Mqtt {
     }
 
     pub async fn publish(&self, topic: &str, payload: Value) -> Result<MessageId> {
+        log::info!("Publishing message to topic: {:?}", topic);
         let topic = format!("{}/{}", self.topic_root, topic);
-        self.mqtt
+        let message_id = self
+            .mqtt
             .lock()
             .await
             .publish(
@@ -87,17 +89,31 @@ impl Mqtt {
                 payload.to_string().as_bytes(),
             )
             .await
-            .map_err(anyhow::Error::from)
+            .map_err(anyhow::Error::from)?;
+        log::info!(
+            "Published message to topic {:?} with ID: {}",
+            topic,
+            message_id
+        );
+        Ok(message_id)
     }
 
     pub async fn subscribe(&self, topic: &str) -> Result<MessageId> {
+        log::info!("Subscribing to topic: {:?}", topic);
         let topic = format!("{}/{}", self.topic_root, topic);
-        self.mqtt
+        let message_id = self
+            .mqtt
             .lock()
             .await
             .subscribe(&topic, QoS::AtMostOnce)
             .await
-            .map_err(anyhow::Error::from)
+            .map_err(anyhow::Error::from)?;
+        log::info!(
+            "Subscribed to topic: {:?} with message ID {}",
+            topic,
+            message_id
+        );
+        Ok(message_id)
     }
 }
 
