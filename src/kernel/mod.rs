@@ -36,7 +36,7 @@ pub struct DeviceConfig {
     pub instance: String,
     pub id: String,
     #[serde(rename = "sleepWhenIdle", default)]
-    sleep_when_idle: bool,
+    pub sleep_when_idle: bool,
 }
 
 pub struct Device {

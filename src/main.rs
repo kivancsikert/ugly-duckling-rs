@@ -86,7 +86,7 @@ async fn start_device(modem: Modem) -> Result<()> {
         // TODO Add wakeup reason
         // TODO Add bootCount
         "time": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs(),
-        // TODO Add sleepWhenIdle
+        "sleepWhenIdle": kernel.config.sleep_when_idle,
     })).await?;
 
     loop {
