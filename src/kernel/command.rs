@@ -54,7 +54,7 @@ impl CommandManager {
             let response = command.execute(payload)?;
             Ok(response)
         } else {
-            Err(anyhow!("Unregistered registered: {}", command_name))
+            Err(anyhow!("Unregistered command: {}", command_name))
         }
     }
 }
