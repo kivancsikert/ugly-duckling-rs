@@ -1,4 +1,5 @@
 pub mod command;
+pub mod console;
 mod mdns;
 mod mqtt;
 mod rtc;

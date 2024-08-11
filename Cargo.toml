@@ -31,6 +31,8 @@ embassy = ["esp-idf-svc/embassy-sync", "esp-idf-svc/embassy-time-driver"]
 log = { version = "0.4", default-features = false }
 anyhow = "1"
 embedded-hal-async = "1"
+embedded-io = { version = "0.6.1", features = ["std"] }
+embedded-io-adapters = { version = "0.6.1", features = ["std"] }
 embedded-svc = "0.28"
 esp-idf-hal = "0.44"
 esp-idf-svc = "0.49"

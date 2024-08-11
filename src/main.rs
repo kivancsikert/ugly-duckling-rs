@@ -10,6 +10,7 @@ use embassy_time::{Duration, Timer};
 use esp_idf_hal::gpio::{AnyIOPin, AnyOutputPin, IOPin, PinDriver};
 use esp_idf_hal::modem::Modem;
 use esp_idf_hal::prelude::Peripherals;
+use kernel::console::console_handler_task;
 use serde_json::json;
 use std::future::Future;
 use std::pin::Pin;
@@ -50,10 +51,11 @@ macro_rules! task {
 async fn run_tasks() {
     let peripherals = Peripherals::take().expect("Failed to take peripherals");
 
-    let tasks: [Pin<Box<dyn Future<Output = ()>>>; 3] = [
+    let tasks: [Pin<Box<dyn Future<Output = ()>>>; 4] = [
         task!(blink(peripherals.pins.gpio4.into())),
         task!(reset_watcher(peripherals.pins.gpio0.downgrade())),
         task!(start_device(peripherals.modem)),
+        task!(console_handler_task(peripherals.pins.gpio2.into())),
     ];
     join_array(tasks).await;
 }
