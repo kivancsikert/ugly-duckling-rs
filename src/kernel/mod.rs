@@ -7,14 +7,9 @@ mod wifi;
 use anyhow::anyhow;
 use anyhow::Result;
 use embassy_futures::join::join;
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::mutex::Mutex;
 use esp_idf_hal::modem::Modem;
 use esp_idf_svc::mdns::EspMdns;
 use esp_idf_svc::sntp::EspSntp;
-use esp_idf_svc::timer::EspTaskTimerService;
-use esp_idf_svc::wifi::AsyncWifi;
-use esp_idf_svc::wifi::EspWifi;
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition};
 use esp_idf_sys::{esp_pm_config_esp32_t, esp_pm_configure};
 use mqtt::IncomingMessageResponse;
@@ -23,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_json::Value;
 use std::ffi::c_void;
-use std::sync::Arc;
+use wifi::Wifi;
 
 use crate::make_static;
 
@@ -41,7 +36,7 @@ pub struct DeviceConfig {
 
 pub struct Device {
     pub config: DeviceConfig,
-    _wifi: Arc<Mutex<CriticalSectionRawMutex, AsyncWifi<EspWifi<'static>>>>,
+    _wifi: Wifi,
     _sntp: EspSntp<'static>,
     pub mqtt: Mqtt,
 }
@@ -49,7 +44,6 @@ pub struct Device {
 impl Device {
     pub async fn init(modem: Modem) -> Result<Self> {
         let sys_loop = EspSystemEventLoop::take()?;
-        let timer_service = EspTaskTimerService::new()?;
         let nvs = EspDefaultNvsPartition::take()?;
 
         let config = load_device_config()?;
@@ -66,8 +60,7 @@ impl Device {
         };
         esp_idf_sys::esp!(unsafe { esp_pm_configure(&pm_config as *const _ as *mut c_void) })?;
 
-        let wifi =
-            wifi::init_wifi(&config.instance, modem, &sys_loop, &timer_service, &nvs).await?;
+        let wifi = Wifi::create(&config.instance, modem, &sys_loop, &nvs).await?;
 
         // TODO Use something better than a static cell
         let command_manager = make_static!(command::CommandManager);

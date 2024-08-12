@@ -36,7 +36,7 @@ fn main() -> Result<()> {
     executor.run(|spawner| {
         spawner
             .spawn(run_tasks())
-            .expect("Could not spawn run_tasks");
+            .expect("Couldn't spawn run_tasks");
     });
 }
 
